@@ -52,7 +52,7 @@ Cross-cutting Services
 
 # Team Responsibilities
 
-## Student A — AI Model & Intelligence
+## Nandini Goyal - AI Model & Intelligence
 
 ### Responsibility
 
@@ -81,7 +81,7 @@ feature/student-a-model
 
 ---
 
-## Student B — Pipeline & Infrastructure
+## Netal Agarwal - Pipeline & Infrastructure
 
 ### Responsibility
 
@@ -110,7 +110,7 @@ feature/student-b-pipeline
 
 ---
 
-## Student C — Security & Dashboard
+## Khwaish Agarwala - Security & Dashboard
 
 ### Responsibility
 
