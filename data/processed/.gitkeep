@@ -1,0 +1,2 @@
+# This directory stores processed feature datasets (e.g., audio_features.csv).
+# Generated CSV/Parquet files are excluded from version control via .gitignore.
