@@ -46,7 +46,16 @@ from src.ai_model.voice.recording import (
     save_wav_file,
     validate_audio_file,
     validate_audio_recording,
+
 )
+from src.ai_model.voice.preprocessing import (
+    PreprocessedAudio,
+    VoicePreprocessor,
+    convert_to_mono,
+    normalize_amplitude,
+    preprocess_audio,
+)
+
 
 
 # ===========================================================================
@@ -520,3 +529,193 @@ def test_interface_validation_methods(synthetic_wav_file: Path):
     # validate_audio_recording standalone function
     val_rec = validate_audio_recording(rec)
     assert val_rec.is_valid is True
+
+
+# ===========================================================================
+# Tests — Audio Preprocessing Pipeline (Commit 5)
+# ===========================================================================
+
+def test_convert_to_mono_from_1d():
+    """Verify convert_to_mono preserves already mono 1D audio."""
+    mono_in = np.array([0.1, -0.2, 0.3, 0.4], dtype=np.float32)
+    mono_out = convert_to_mono(mono_in)
+    assert mono_out.ndim == 1
+    assert mono_out.dtype == np.float32
+    assert np.allclose(mono_out, mono_in)
+
+
+def test_convert_to_mono_from_2d_single_channel():
+    """Verify convert_to_mono handles (N, 1) column vectors."""
+    col_in = np.array([[0.1], [-0.2], [0.3]], dtype=np.float32)
+    mono_out = convert_to_mono(col_in)
+    assert mono_out.ndim == 1
+    assert mono_out.shape == (3,)
+    assert np.allclose(mono_out, [0.1, -0.2, 0.3])
+
+
+def test_convert_to_mono_from_stereo():
+    """Verify convert_to_mono correctly averages left and right channels."""
+    stereo_in = np.array([[0.2, 0.4], [0.6, 0.8], [-0.4, -0.2]], dtype=np.float32)
+    mono_out = convert_to_mono(stereo_in)
+    assert mono_out.ndim == 1
+    assert mono_out.shape == (3,)
+    expected = np.array([0.3, 0.7, -0.3], dtype=np.float32)
+    assert np.allclose(mono_out, expected)
+
+
+def test_convert_to_mono_multi_channel():
+    """Verify convert_to_mono handles 4-channel audio by averaging across channels."""
+    quad_in = np.array([[0.1, 0.2, 0.3, 0.4]], dtype=np.float32)
+    mono_out = convert_to_mono(quad_in)
+    assert mono_out.shape == (1,)
+    assert np.isclose(mono_out[0], 0.25)
+
+
+def test_convert_to_mono_invalid_inputs():
+    """Verify convert_to_mono safely rejects empty, non-finite, or 3D arrays."""
+    with pytest.raises(AudioDataError, match="empty"):
+        convert_to_mono(np.array([], dtype=np.float32))
+
+    with pytest.raises(AudioDataError, match="non-finite"):
+        convert_to_mono(np.array([0.1, np.nan, 0.3], dtype=np.float32))
+
+    with pytest.raises(AudioDataError, match="Unsupported audio array dimension"):
+        convert_to_mono(np.zeros((2, 2, 2), dtype=np.float32))
+
+
+def test_normalize_amplitude_deterministic():
+    """Verify normalize_amplitude scales waveform peak to target peak (0.95)."""
+    data = np.array([-0.5, 0.2, 0.4, -0.1], dtype=np.float32)
+    norm, orig_peak = normalize_amplitude(data, target_peak=0.95)
+
+    assert np.isclose(orig_peak, 0.5)
+    assert np.isclose(float(np.max(np.abs(norm))), 0.95)
+    assert norm.dtype == np.float32
+    assert np.isclose(norm[0], -0.95)
+    assert np.isclose(norm[1], 0.2 * (0.95 / 0.5))
+
+
+def test_normalize_amplitude_custom_target_peak():
+    """Verify normalize_amplitude respects custom target peak (e.g. 0.8)."""
+    data = np.array([0.1, -0.4, 0.2], dtype=np.float32)
+    norm, orig_peak = normalize_amplitude(data, target_peak=0.8)
+    assert np.isclose(orig_peak, 0.4)
+    assert np.isclose(float(np.max(np.abs(norm))), 0.8)
+
+
+def test_normalize_amplitude_silent_audio():
+    """Verify normalize_amplitude handles all-zero silent audio without division by zero."""
+    silent = np.zeros(100, dtype=np.float32)
+    norm, orig_peak = normalize_amplitude(silent, target_peak=0.95)
+
+    assert orig_peak == 0.0
+    assert np.all(norm == 0.0)
+    assert norm.shape == (100,)
+
+
+def test_normalize_amplitude_invalid_inputs():
+    """Verify normalize_amplitude safely rejects empty, non-finite, or out-of-range target peaks."""
+    with pytest.raises(AudioDataError, match="empty"):
+        normalize_amplitude(np.array([]))
+
+    with pytest.raises(AudioDataError, match="non-finite"):
+        normalize_amplitude(np.array([np.nan]))
+
+    with pytest.raises(AudioDataError, match="Target peak must be in"):
+        normalize_amplitude(np.array([0.5]), target_peak=1.5)
+
+    with pytest.raises(AudioDataError, match="Target peak must be in"):
+        normalize_amplitude(np.array([0.5]), target_peak=0.0)
+
+
+def test_preprocess_audio_pipeline_from_file(synthetic_wav_file: Path):
+    """Verify full preprocessing pipeline on a valid WAV file."""
+    preprocessed = preprocess_audio(synthetic_wav_file)
+
+    assert isinstance(preprocessed, PreprocessedAudio)
+    assert preprocessed.channels == 1
+    assert preprocessed.sample_rate == 16_000
+    assert preprocessed.audio_data.ndim == 1
+    assert preprocessed.participant_id == "P001"
+    assert np.isclose(preprocessed.peak_amplitude, 0.95, atol=1e-4)
+    assert preprocessed.metadata["converted_to_mono"] is False
+    assert preprocessed.metadata["normalization_target_peak"] == 0.95
+
+
+def test_preprocess_audio_preserves_sample_rate_and_downmixes_stereo():
+    """
+    Verify pipeline converts stereo to mono and preserves input sample rate
+    (e.g., 44.1 kHz is preserved, resampling is Commit 6).
+    """
+    sr = 44_100
+    duration = 5.0
+    stereo_bytes = _create_synthetic_wav_bytes(
+        duration_seconds=duration,
+        sample_rate=sr,
+        channels=2,
+    )
+
+    preprocessed = preprocess_audio(stereo_bytes, participant_id="P099")
+
+    # Sample rate must be preserved as 44.1 kHz (resampling is Commit 6)
+    assert preprocessed.sample_rate == 44_100
+    # Must be mono
+    assert preprocessed.channels == 1
+    assert preprocessed.audio_data.ndim == 1
+    # Normalized to 0.95 peak
+    assert np.isclose(preprocessed.peak_amplitude, 0.95, atol=1e-4)
+    assert preprocessed.metadata["converted_to_mono"] is True
+    assert preprocessed.metadata["original_channels"] == 2
+    assert preprocessed.participant_id == "P099"
+
+
+def test_preprocess_audio_to_recording():
+    """Verify PreprocessedAudio can convert back to AudioRecording."""
+    sr = 16_000
+    pre = PreprocessedAudio(
+        audio_data=np.ones(sr * 5, dtype=np.float32) * 0.95,
+        sample_rate=sr,
+        channels=1,
+        participant_id="P002",
+        metadata={"step": "test"},
+    )
+    rec = pre.to_recording()
+    assert isinstance(rec, AudioRecording)
+    assert rec.sample_rate == sr
+    assert rec.channels == 1
+    assert rec.participant_id == "P002"
+    assert rec.is_mono is True
+
+
+def test_voice_preprocessor_controller(synthetic_wav_file: Path):
+    """Verify VoicePreprocessor class methods and operations."""
+    preprocessor = VoicePreprocessor()
+    result = preprocessor.process(synthetic_wav_file)
+
+    assert isinstance(result, PreprocessedAudio)
+    assert result.channels == 1
+    assert np.isclose(result.peak_amplitude, 0.95, atol=1e-4)
+
+    # Test class to_mono and normalize helpers
+    mono = preprocessor.to_mono(np.array([[0.2, 0.4]], dtype=np.float32))
+    assert np.isclose(mono[0], 0.3)
+
+    norm, orig_pk = preprocessor.normalize(np.array([0.5], dtype=np.float32))
+    assert np.isclose(norm[0], 0.95)
+    assert np.isclose(orig_pk, 0.5)
+
+
+def test_preprocess_audio_invalid_inputs():
+    """Verify preprocess_audio safely handles invalid types and empty data."""
+    with pytest.raises(TypeError, match="Unsupported input type"):
+        preprocess_audio(12345)  # type: ignore
+
+    empty_rec = AudioRecording(
+        audio_data=np.array([], dtype=np.float32),
+        sample_rate=16000,
+        channels=1,
+        duration_seconds=0.0,
+    )
+    with pytest.raises(AudioDataError, match="zero samples"):
+        preprocess_audio(empty_rec)
+

@@ -55,5 +55,10 @@ from .recording import (
     validate_audio_file,
     validate_audio_recording,
 )
-
-
+from .preprocessing import (
+    PreprocessedAudio,
+    VoicePreprocessor,
+    convert_to_mono,
+    normalize_amplitude,
+    preprocess_audio,
+)
