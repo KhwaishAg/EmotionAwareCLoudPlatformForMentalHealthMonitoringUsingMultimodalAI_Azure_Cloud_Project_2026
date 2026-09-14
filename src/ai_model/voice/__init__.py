@@ -6,6 +6,7 @@ for the Multimodal Student Stress/Risk Assessment system.
 
 Modules:
     config          - Centralized configuration (audio specs, feature params, model settings)
+    recording       - Audio input interface, WAV loading, and recording abstraction
     preprocessing   - Audio loading, mono conversion, resampling, normalization, silence handling
     features        - Acoustic feature extraction (MFCC, pitch, energy, spectral)
     model           - Voice ML model training (Logistic Regression, Random Forest)
@@ -19,3 +20,31 @@ Note:
 """
 
 __version__ = "0.1.0"
+
+from .config import (
+    AUDIO_CONFIG,
+    FEATURE_CONFIG,
+    MODEL_CONFIG,
+    PATH_CONFIG,
+    AudioConfig,
+    FeatureConfig,
+    ModelConfig,
+    PathConfig,
+)
+from .recording import (
+    STANDARDIZED_RECORDING_PROMPT,
+    AudioCorruptError,
+    AudioError,
+    AudioFormatError,
+    AudioInputSource,
+    AudioNotFoundError,
+    AudioRecording,
+    BufferInputSource,
+    LocalFileInputSource,
+    VoiceRecordingInterface,
+    extract_participant_id,
+    load_wav_bytes,
+    load_wav_file,
+    save_wav_file,
+)
+
