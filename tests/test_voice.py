@@ -126,14 +126,22 @@ from src.ai_model.voice.model import (
     separate_features_and_target,
 )
 from src.ai_model.voice.evaluation import (
+    ConfusionMatrixResult,
     EvaluationError,
     EvaluationInputError,
     EvaluationMetrics,
+    VoiceConfusionMatrix,
+    VoiceConfusionMatrixResult,
     VoiceEvaluationMetrics,
     VoiceModelMetrics,
     calculate_classification_metrics,
+    calculate_voice_confusion_matrix,
     calculate_voice_metrics,
+    compute_confusion_matrix,
+    compute_voice_confusion_matrix,
     compute_voice_metrics,
+    evaluate_confusion_matrix,
+    evaluate_voice_confusion_matrix,
     evaluate_voice_model,
 )
 
@@ -3137,6 +3145,237 @@ def test_voice_evaluation_aliases_and_exports():
     assert calculate_classification_metrics is calculate_voice_metrics
     assert issubclass(EvaluationError, ModelError)
     assert issubclass(EvaluationInputError, EvaluationError)
+
+
+# ===========================================================================
+# Confusion Matrix Tests (Commit 17)
+# ===========================================================================
+
+def test_compute_voice_confusion_matrix_binary_arbitrary_labels():
+    """Verify compute_voice_confusion_matrix on binary string labels."""
+    y_true = ["low_risk", "high_risk", "low_risk", "high_risk"]
+    y_pred = ["low_risk", "high_risk", "high_risk", "high_risk"]
+
+    cm = compute_voice_confusion_matrix(y_true, y_pred)
+
+    assert isinstance(cm, VoiceConfusionMatrix)
+    assert cm.matrix.shape == (2, 2)
+    assert cm.total_samples == 4
+    assert cm.correct_predictions == 3
+    assert np.isclose(cm.accuracy, 0.75)
+    assert set(cm.labels) == {"high_risk", "low_risk"}
+
+    # Normalized matrix
+    assert cm.normalized_matrix is not None
+    assert cm.normalized_matrix.shape == (2, 2)
+    assert np.all(cm.normalized_matrix >= 0.0)
+    assert np.all(cm.normalized_matrix <= 1.0)
+    assert np.allclose(cm.normalized_matrix.sum(axis=1), 1.0)
+
+    # DataFrame representation
+    df_raw = cm.to_dataframe(normalized=False)
+    assert isinstance(df_raw, pd.DataFrame)
+    assert df_raw.shape == (2, 2)
+    assert list(df_raw.index) == [f"true_{lbl}" for lbl in cm.labels]
+    assert list(df_raw.columns) == [f"pred_{lbl}" for lbl in cm.labels]
+
+    df_norm = cm.to_dataframe(normalized=True)
+    assert isinstance(df_norm, pd.DataFrame)
+    assert np.allclose(df_norm.to_numpy(), cm.normalized_matrix)
+
+    # Dictionary conversion & access
+    d = cm.to_dict()
+    assert isinstance(d, dict)
+    assert "matrix" in d
+    assert "labels" in d
+    assert "normalized_matrix" in d
+    assert "total_samples" in d
+    assert cm["total_samples"] == 4
+    assert "labels" in cm
+    assert "classes=" in repr(cm)
+
+
+def test_compute_voice_confusion_matrix_preserves_explicit_label_ordering():
+    """Verify explicit class/label ordering is strictly preserved in rows and columns."""
+    labels_order = ["severe", "mild", "moderate"]
+    y_true = ["moderate", "severe", "mild", "severe"]
+    y_pred = ["moderate", "severe", "moderate", "severe"]
+
+    cm = compute_voice_confusion_matrix(y_true, y_pred, labels=labels_order)
+
+    # Labels list must match the requested custom order exactly
+    assert cm.labels == labels_order
+
+    # Check row 0 corresponds to "severe" (2 true instances: 2 correct)
+    assert cm.matrix[0, 0] == 2  # true severe, pred severe
+    assert cm.matrix[0, 1] == 0  # true severe, pred mild
+    assert cm.matrix[0, 2] == 0  # true severe, pred moderate
+
+    # Check row 1 corresponds to "mild" (1 true instance: predicted as moderate)
+    assert cm.matrix[1, 0] == 0  # true mild, pred severe
+    assert cm.matrix[1, 1] == 0  # true mild, pred mild
+    assert cm.matrix[1, 2] == 1  # true mild, pred moderate
+
+    # Check row 2 corresponds to "moderate" (1 true instance: predicted as moderate)
+    assert cm.matrix[2, 0] == 0  # true moderate, pred severe
+    assert cm.matrix[2, 1] == 0  # true moderate, pred mild
+    assert cm.matrix[2, 2] == 1  # true moderate, pred moderate
+
+    # DataFrame reflects exact custom ordering
+    df = cm.to_dataframe()
+    assert list(df.index) == ["true_severe", "true_mild", "true_moderate"]
+    assert list(df.columns) == ["pred_severe", "pred_mild", "pred_moderate"]
+
+
+def test_compute_voice_confusion_matrix_multiclass():
+    """Verify multiclass confusion matrix calculation and properties."""
+    y_true = ["c1", "c1", "c2", "c2", "c3", "c3", "c3"]
+    y_pred = ["c1", "c2", "c2", "c2", "c3", "c1", "c3"]
+
+    cm = compute_voice_confusion_matrix(y_true, y_pred)
+    assert cm.matrix.shape == (3, 3)
+    assert cm.total_samples == 7
+    assert cm.correct_predictions == 5
+    assert np.isclose(cm.accuracy, 5 / 7)
+
+    # Row sums equal true class supports: 2, 2, 3
+    assert np.array_equal(cm.matrix.sum(axis=1), [2, 2, 3])
+
+
+def test_compute_voice_confusion_matrix_numeric_labels():
+    """Verify confusion matrix with integer labels."""
+    y_true = [0, 1, 2, 0, 1, 2]
+    y_pred = [0, 1, 1, 0, 1, 2]
+
+    cm = compute_voice_confusion_matrix(y_true, y_pred, labels=[2, 1, 0])
+    assert cm.labels == [2, 1, 0]
+    assert cm.matrix.shape == (3, 3)
+    assert cm.correct_predictions == 5
+    assert cm.total_samples == 6
+
+
+def test_compute_voice_confusion_matrix_zero_sample_class():
+    """Verify safe handling of a label that has zero occurrences in true and pred."""
+    labels = ["present", "absent", "unobserved"]
+    y_true = ["present", "present", "absent"]
+    y_pred = ["present", "absent", "absent"]
+
+    cm = compute_voice_confusion_matrix(y_true, y_pred, labels=labels, normalize="true")
+    assert cm.matrix.shape == (3, 3)
+    # Row for "unobserved" (index 2) must be all zeros without NaN
+    assert np.all(cm.matrix[2, :] == 0)
+    assert np.all(cm.normalized_matrix[2, :] == 0.0)
+    assert not np.isnan(cm.normalized_matrix).any()
+
+
+def test_compute_voice_confusion_matrix_input_validation():
+    """Verify validation for empty, mismatched, or invalid inputs."""
+    # None inputs
+    with pytest.raises(EvaluationInputError, match="cannot be None"):
+        compute_voice_confusion_matrix(None, ["a", "b"])
+
+    with pytest.raises(EvaluationInputError, match="cannot be None"):
+        compute_voice_confusion_matrix(["a", "b"], None)
+
+    # Empty inputs
+    with pytest.raises(EvaluationInputError, match="empty"):
+        compute_voice_confusion_matrix([], [])
+
+    # Sample count mismatch
+    with pytest.raises(EvaluationInputError, match="mismatch"):
+        compute_voice_confusion_matrix(["a", "b", "c"], ["a", "b"])
+
+    # Empty explicit labels list
+    with pytest.raises(EvaluationInputError, match="cannot be empty"):
+        compute_voice_confusion_matrix(["a", "b"], ["a", "b"], labels=[])
+
+    # Null values in y_true
+    with pytest.raises(EvaluationInputError, match="null/NaN"):
+        compute_voice_confusion_matrix(pd.Series(["a", None]), pd.Series(["a", "a"]))
+
+
+def test_evaluate_voice_confusion_matrix_with_logistic_regression():
+    """Verify evaluate_voice_confusion_matrix helper with VoiceLogisticRegression."""
+    df_train = _create_synthetic_feature_df(n_samples=20, target_classes=("low", "high"), random_seed=42)
+    df_test = _create_synthetic_feature_df(n_samples=10, target_classes=("low", "high"), random_seed=77)
+
+    model = VoiceLogisticRegression(random_state=42)
+    model.fit(df_train)
+
+    # Evaluate on combined DataFrame
+    cm = evaluate_voice_confusion_matrix(model, df_test)
+    assert isinstance(cm, VoiceConfusionMatrix)
+    assert cm.matrix.shape == (2, 2)
+    assert cm.total_samples == 10
+    # Labels should automatically match model.classes_ ordering
+    assert cm.labels == list(model.classes_)
+
+    # Evaluate on separated features and target
+    X_test, y_test = separate_features_and_target(df_test)
+    cm_sep = evaluate_voice_confusion_matrix(model, X=X_test, y=y_test)
+    assert np.array_equal(cm_sep.matrix, cm.matrix)
+    assert cm_sep.labels == cm.labels
+
+
+def test_evaluate_voice_confusion_matrix_with_random_forest():
+    """Verify evaluate_voice_confusion_matrix helper with VoiceRandomForest (multiclass)."""
+    df_train = _create_synthetic_feature_df(
+        n_samples=24,
+        target_classes=("class_a", "class_b", "class_c"),
+        random_seed=42,
+    )
+    df_test = _create_synthetic_feature_df(
+        n_samples=12,
+        target_classes=("class_a", "class_b", "class_c"),
+        random_seed=99,
+    )
+
+    model = VoiceRandomForest(n_estimators=20, random_state=42)
+    model.fit(df_train)
+
+    # Preserves explicit custom label order
+    custom_order = ["class_c", "class_a", "class_b"]
+    cm = evaluate_voice_confusion_matrix(model, df_test, labels=custom_order)
+    assert isinstance(cm, VoiceConfusionMatrix)
+    assert cm.labels == custom_order
+    assert cm.matrix.shape == (3, 3)
+    assert cm.total_samples == 12
+
+
+def test_evaluate_voice_confusion_matrix_error_handling():
+    """Verify error handling in evaluate_voice_confusion_matrix."""
+    # None model
+    with pytest.raises(EvaluationError, match="cannot be None"):
+        evaluate_voice_confusion_matrix(None, pd.DataFrame({"feat_1": [1.0]}))
+
+    # Model missing predict
+    class NoPredict:
+        pass
+
+    with pytest.raises(EvaluationError, match="does not implement 'predict'"):
+        evaluate_voice_confusion_matrix(NoPredict(), pd.DataFrame({"feat_1": [1.0]}), y=np.array([1]))
+
+    # Unfitted model
+    unfitted_lr = VoiceLogisticRegression()
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        evaluate_voice_confusion_matrix(unfitted_lr, pd.DataFrame({"feat_1": [1.0]}), y=np.array([1]))
+
+    # Non-DataFrame without y
+    dummy_fitted = VoiceLogisticRegression()
+    df_train = _create_synthetic_feature_df(n_samples=10, random_seed=42)
+    dummy_fitted.fit(df_train)
+    with pytest.raises(EvaluationInputError, match="Target labels 'y' must be provided"):
+        evaluate_voice_confusion_matrix(dummy_fitted, np.ones((5, 41)), y=None)
+
+
+def test_voice_confusion_matrix_aliases_and_exports():
+    """Verify confusion matrix aliases and module exports."""
+    assert ConfusionMatrixResult is VoiceConfusionMatrix
+    assert VoiceConfusionMatrixResult is VoiceConfusionMatrix
+    assert calculate_voice_confusion_matrix is compute_voice_confusion_matrix
+    assert compute_confusion_matrix is compute_voice_confusion_matrix
+    assert evaluate_confusion_matrix is evaluate_voice_confusion_matrix
+
 
 
 

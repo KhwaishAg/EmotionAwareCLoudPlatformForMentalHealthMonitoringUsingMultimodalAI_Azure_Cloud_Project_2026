@@ -133,14 +133,22 @@ from .model import (
     separate_features_and_target,
 )
 from .evaluation import (
+    ConfusionMatrixResult,
     EvaluationError,
     EvaluationInputError,
     EvaluationMetrics,
+    VoiceConfusionMatrix,
+    VoiceConfusionMatrixResult,
     VoiceEvaluationMetrics,
     VoiceModelMetrics,
     calculate_classification_metrics,
+    calculate_voice_confusion_matrix,
     calculate_voice_metrics,
+    compute_confusion_matrix,
+    compute_voice_confusion_matrix,
     compute_voice_metrics,
+    evaluate_confusion_matrix,
+    evaluate_voice_confusion_matrix,
     evaluate_voice_model,
 )
 
