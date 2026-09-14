@@ -19,6 +19,7 @@ Note:
 import io
 from pathlib import Path
 import numpy as np
+import pandas as pd
 import pytest
 import scipy.io.wavfile as wavfile
 
@@ -97,6 +98,19 @@ from src.ai_model.voice.features import (
     get_mfcc_feature_names,
     get_pitch_feature_names,
     get_spectral_feature_names,
+)
+from src.ai_model.voice.dataset import (
+    AudioDatasetLoader,
+    DatasetAudioNotFoundError,
+    DatasetError,
+    DatasetExtractionError,
+    DatasetLabelError,
+    DatasetMetadataError,
+    DatasetNotFoundError,
+    VoiceDatasetLoader,
+    load_audio_dataset,
+    load_voice_dataset,
+    save_voice_dataset,
 )
 
 
@@ -2035,6 +2049,256 @@ def test_voice_feature_extractor_combined_methods():
     # Alias dict extraction
     fdict_all = extractor.extract_all_dict(audio, sample_rate=sr)
     assert fdict == fdict_all
+
+
+# ===========================================================================
+# Audio Dataset Loader Tests (Commit 13)
+# ===========================================================================
+
+def _generate_test_audio_file(
+    path: Path,
+    frequency: float = 440.0,
+    duration_seconds: float = 6.0,
+    sample_rate: int = 16_000,
+) -> Path:
+    """Helper to generate a clean synthetic WAV file for dataset testing."""
+    num_samples = int(duration_seconds * sample_rate)
+    t = np.linspace(0, duration_seconds, num_samples, endpoint=False)
+    waveform = (0.7 * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
+    pcm = (waveform * 32767.0).astype(np.int16)
+    wavfile.write(str(path), sample_rate, pcm)
+    return path
+
+
+def test_dataset_loader_valid_synthetic_dataset(tmp_path: Path):
+    """Verify loading labeled audio files into a 41-feature dataset DataFrame."""
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    f1 = _generate_test_audio_file(audio_dir / "P001_session1.wav", frequency=300.0)
+    f2 = _generate_test_audio_file(audio_dir / "P002_session1.wav", frequency=450.0)
+    f3 = _generate_test_audio_file(audio_dir / "P003_session1.wav", frequency=600.0)
+
+    metadata_path = tmp_path / "metadata.csv"
+    meta_df = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "P001", "target": "mild_stress"},
+        {"filename": f2.name, "participant_id": "P002", "target": "moderate_stress"},
+        {"filename": f3.name, "participant_id": "P003", "target": "severe_stress"},
+    ])
+    meta_df.to_csv(metadata_path, index=False)
+
+    df = load_voice_dataset(metadata=metadata_path, audio_dir=audio_dir)
+
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 3
+    # Expected columns: participant_id (1) + 41 features + target (1) = 43 columns
+    expected_columns = ["participant_id"] + list(COMBINED_FEATURE_NAMES) + ["target"]
+    assert list(df.columns) == expected_columns
+    assert len(df.columns) == 43
+
+    # Participant IDs must be preserved anonymously
+    assert list(df["participant_id"]) == ["P001", "P002", "P003"]
+
+    # Target labels must be preserved without hardcoding or mapping
+    assert list(df["target"]) == ["mild_stress", "moderate_stress", "severe_stress"]
+
+    # Feature columns must be float32 and finite
+    for col in COMBINED_FEATURE_NAMES:
+        assert df[col].dtype == np.float32
+        assert not df[col].isna().any()
+        assert np.all(np.isfinite(df[col]))
+
+
+def test_dataset_loader_component_consistency(tmp_path: Path):
+    """Verify DataFrame row values match direct pipeline preprocessing and extraction."""
+    f1 = _generate_test_audio_file(tmp_path / "P001_check.wav", frequency=440.0)
+    meta_df = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "P001", "target": 1},
+    ])
+
+    df = load_voice_dataset(metadata=meta_df, audio_dir=tmp_path)
+
+    # Compute directly via preprocessing + combined feature pipeline
+    prep = preprocess_audio(f1)
+    direct_feats = extract_combined_features(prep)
+
+    extracted_row = df.loc[0, list(COMBINED_FEATURE_NAMES)].to_numpy(dtype=np.float32)
+    assert np.allclose(extracted_row, direct_feats, atol=1e-5)
+
+
+def test_dataset_loader_missing_metadata_file(tmp_path: Path):
+    """Verify DatasetNotFoundError is raised when metadata file does not exist."""
+    missing_meta = tmp_path / "nonexistent_metadata.csv"
+    with pytest.raises(DatasetNotFoundError, match="Metadata file does not exist"):
+        load_voice_dataset(metadata=missing_meta, audio_dir=tmp_path)
+
+
+def test_dataset_loader_empty_metadata(tmp_path: Path):
+    """Verify DatasetMetadataError is raised when metadata is empty."""
+    empty_csv = tmp_path / "empty_metadata.csv"
+    pd.DataFrame().to_csv(empty_csv, index=False)
+
+    with pytest.raises(DatasetMetadataError, match="empty"):
+        load_voice_dataset(metadata=empty_csv, audio_dir=tmp_path)
+
+    with pytest.raises(DatasetMetadataError, match="empty"):
+        load_voice_dataset(metadata=pd.DataFrame(), audio_dir=tmp_path)
+
+
+def test_dataset_loader_missing_columns(tmp_path: Path):
+    """Verify DatasetMetadataError is raised when required columns cannot be found."""
+    f1 = _generate_test_audio_file(tmp_path / "P001_test.wav")
+
+    # Missing target label column
+    bad_meta1 = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "P001"},
+    ])
+    with pytest.raises(DatasetMetadataError, match="target label"):
+        load_voice_dataset(metadata=bad_meta1, audio_dir=tmp_path)
+
+    # Missing filename column
+    bad_meta2 = pd.DataFrame([
+        {"participant_id": "P001", "target": "stress"},
+    ])
+    with pytest.raises(DatasetMetadataError, match="audio filename"):
+        load_voice_dataset(metadata=bad_meta2, audio_dir=tmp_path)
+
+
+def test_dataset_loader_missing_audio_file(tmp_path: Path):
+    """Verify DatasetAudioNotFoundError is raised when an audio file does not exist."""
+    meta_df = pd.DataFrame([
+        {"filename": "does_not_exist.wav", "participant_id": "P001", "target": 0},
+    ])
+
+    with pytest.raises(DatasetAudioNotFoundError, match="does not exist"):
+        load_voice_dataset(metadata=meta_df, audio_dir=tmp_path, on_error="raise")
+
+    # Test on_error='skip' skips row
+    with pytest.warns(UserWarning, match="does not exist"):
+        # If all rows skipped, raises DatasetMetadataError
+        with pytest.raises(DatasetMetadataError, match="No valid audio samples"):
+            load_voice_dataset(metadata=meta_df, audio_dir=tmp_path, on_error="skip")
+
+
+def test_dataset_loader_invalid_target_label(tmp_path: Path):
+    """Verify DatasetLabelError is raised when target label is null/empty."""
+    f1 = _generate_test_audio_file(tmp_path / "P001_lbl.wav")
+
+    # None / NaN label
+    meta_nan = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "P001", "target": None},
+    ])
+    with pytest.raises(DatasetLabelError, match="Invalid target label"):
+        load_voice_dataset(metadata=meta_nan, audio_dir=tmp_path, on_error="raise")
+
+    # Empty string label
+    meta_empty_str = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "P001", "target": "   "},
+    ])
+    with pytest.raises(DatasetLabelError, match="Invalid target label"):
+        load_voice_dataset(metadata=meta_empty_str, audio_dir=tmp_path, on_error="raise")
+
+
+def test_dataset_loader_corrupt_audio_file(tmp_path: Path):
+    """Verify DatasetExtractionError is raised when audio file cannot be loaded."""
+    corrupt_file = tmp_path / "corrupt.wav"
+    corrupt_file.write_bytes(b"THIS IS NOT A VALID WAV FILE")
+
+    meta_df = pd.DataFrame([
+        {"filename": corrupt_file.name, "participant_id": "P001", "target": 1},
+    ])
+
+    with pytest.raises(DatasetExtractionError, match="Feature extraction failed"):
+        load_voice_dataset(metadata=meta_df, audio_dir=tmp_path, on_error="raise")
+
+
+def test_dataset_loader_on_error_skip(tmp_path: Path):
+    """Verify on_error='skip' processes valid audio while bypassing invalid files."""
+    valid_file = _generate_test_audio_file(tmp_path / "valid.wav", frequency=400.0)
+    corrupt_file = tmp_path / "corrupt.wav"
+    corrupt_file.write_bytes(b"INVALID_WAV")
+
+    meta_df = pd.DataFrame([
+        {"filename": valid_file.name, "participant_id": "P001", "target": "ok"},
+        {"filename": corrupt_file.name, "participant_id": "P002", "target": "corrupt"},
+    ])
+
+    with pytest.warns(UserWarning):
+        df = load_voice_dataset(metadata=meta_df, audio_dir=tmp_path, on_error="skip")
+
+    assert len(df) == 1
+    assert df.loc[0, "participant_id"] == "P001"
+    assert df.loc[0, "target"] == "ok"
+
+
+def test_dataset_loader_custom_column_names(tmp_path: Path):
+    """Verify explicit custom column names are supported properly."""
+    f1 = _generate_test_audio_file(tmp_path / "sample_a.wav", frequency=350.0)
+
+    custom_meta = pd.DataFrame([
+        {"audio_clip": f1.name, "subject_code": "ANON_42", "risk_rating": 3.5},
+    ])
+
+    loader = AudioDatasetLoader(
+        filename_column="audio_clip",
+        participant_id_column="subject_code",
+        label_column="risk_rating",
+    )
+    df = loader.load(metadata=custom_meta, audio_dir=tmp_path)
+
+    assert len(df) == 1
+    assert df.columns[0] == "subject_code"
+    assert df.columns[-1] == "risk_rating"
+    assert df.loc[0, "subject_code"] == "ANON_42"
+    assert df.loc[0, "risk_rating"] == 3.5
+
+
+def test_dataset_loader_anonymous_participant_id_fallback(tmp_path: Path):
+    """Verify participant ID is extracted from filename if column is missing/empty."""
+    f1 = _generate_test_audio_file(tmp_path / "P009_task1.wav", frequency=420.0)
+
+    meta_df = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "", "target": "high"},
+    ])
+
+    df = load_voice_dataset(metadata=meta_df, audio_dir=tmp_path)
+    assert len(df) == 1
+    assert df.loc[0, "participant_id"] == "P009"
+
+
+def test_dataset_loader_save_and_reload(tmp_path: Path):
+    """Verify saving the extracted dataset DataFrame to CSV and reloading."""
+    f1 = _generate_test_audio_file(tmp_path / "P001_rec.wav", frequency=500.0)
+    meta_df = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "P001", "target": 0},
+    ])
+
+    loader = AudioDatasetLoader(audio_dir=tmp_path)
+    df = loader.load(metadata=meta_df)
+
+    out_csv = tmp_path / "output_features.csv"
+    saved_path = loader.save(df, out_csv)
+    assert saved_path.exists()
+
+    reloaded = pd.read_csv(saved_path)
+    assert len(reloaded) == 1
+    assert len(reloaded.columns) == 43
+    assert list(reloaded.columns) == list(df.columns)
+
+
+def test_voice_data_module_reexports():
+    """Verify src.ai_model.voice.data re-exports all dataset symbols properly."""
+    from src.ai_model.voice.data import (
+        AudioDatasetLoader as A1,
+        VoiceDatasetLoader as V1,
+        DatasetError as E1,
+        load_voice_dataset as L1,
+    )
+    assert A1 is AudioDatasetLoader
+    assert V1 is VoiceDatasetLoader
+    assert E1 is DatasetError
+    assert L1 is load_voice_dataset
+
 
 
 

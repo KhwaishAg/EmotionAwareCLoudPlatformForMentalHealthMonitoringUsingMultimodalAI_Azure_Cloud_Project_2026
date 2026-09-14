@@ -9,6 +9,7 @@ Modules:
     recording       - Audio input interface, WAV loading, and recording abstraction
     preprocessing   - Audio loading, mono conversion, resampling, normalization, silence handling
     features        - Acoustic feature extraction (MFCC, pitch, energy, spectral)
+    dataset         - Labeled audio dataset loader converting recordings into 41-feature datasets
     model           - Voice ML model training (Logistic Regression, Random Forest)
     evaluation      - Model evaluation metrics and confusion matrix
     predict         - Inference interface for the trained voice model
@@ -105,6 +106,19 @@ from .features import (
     get_mfcc_feature_names,
     get_pitch_feature_names,
     get_spectral_feature_names,
+)
+from .dataset import (
+    AudioDatasetLoader,
+    DatasetAudioNotFoundError,
+    DatasetError,
+    DatasetExtractionError,
+    DatasetLabelError,
+    DatasetMetadataError,
+    DatasetNotFoundError,
+    VoiceDatasetLoader,
+    load_audio_dataset,
+    load_voice_dataset,
+    save_voice_dataset,
 )
 
 
