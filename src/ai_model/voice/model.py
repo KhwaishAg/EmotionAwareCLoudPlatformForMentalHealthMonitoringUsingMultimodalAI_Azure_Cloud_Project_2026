@@ -1,8 +1,484 @@
 """
-Voice Modality — ML Model Training
+Voice Modality — Baseline Classification Model: Logistic Regression
 
-Implements classical ML baselines (Logistic Regression, Random Forest)
-for voice-level stress/risk classification.
+Implements classical machine learning baseline models for voice-derived
+stress/risk assessment using fixed-length acoustic feature representations (41D default).
 
-Implementation will be added in subsequent commits.
+Components:
+    - VoiceLogisticRegression: Scikit-learn based Logistic Regression classifier
+      with standard feature scaling, configurable random_state and max_iter,
+      and support for binary and multiclass target labels.
+    - separate_features_and_target: Utility function to decouple acoustic feature columns
+      from metadata identifiers (participant_id) and target labels.
+    - Input validation: Column integrity, numeric dtype checks, NaN/Inf checks,
+      and sample count verification.
+    - Full fit / predict / predict_proba interface with class probability dictionaries.
+
+Specifications adhere to:
+    - Centralized config: src/ai_model/voice/config.py (ModelConfig, FeatureConfig)
+    - Input: pandas DataFrame with 41 voice features (or numpy ndarray) and target
+    - No hardcoded target labels or dataset names.
 """
+
+from typing import Any, Dict, List, Optional, Tuple, Union
+import numpy as np
+import pandas as pd
+from sklearn.exceptions import NotFittedError
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+
+from .config import MODEL_CONFIG, ModelConfig
+from .features import COMBINED_FEATURE_NAMES
+from .recording import AudioError
+
+
+# ===========================================================================
+# Exceptions
+# ===========================================================================
+
+class ModelError(AudioError):
+    """Base exception for voice model errors."""
+    pass
+
+
+class ModelNotFittedError(ModelError):
+    """Raised when predict or predict_proba is called before fitting."""
+    pass
+
+
+class ModelInputError(ModelError):
+    """Raised when input features, columns, or target labels are invalid."""
+    pass
+
+
+# ===========================================================================
+# Helper Functions
+# ===========================================================================
+
+def separate_features_and_target(
+    data: pd.DataFrame,
+    target_column: str = MODEL_CONFIG.label_column,
+    id_column: Optional[str] = MODEL_CONFIG.participant_id_column,
+    feature_columns: Optional[List[str]] = None,
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Decouple acoustic feature columns from metadata identifiers and target labels.
+
+    Parameters:
+        data: pandas DataFrame containing feature columns, optional participant ID, and target label.
+        target_column: Column name of the prediction target (default: 'target').
+        id_column: Column name of the participant identifier to exclude (default: 'participant_id').
+        feature_columns: Optional explicit list of feature columns to retain.
+                         If None, drops id_column and target_column from data.
+
+    Returns:
+        Tuple of (X, y) where:
+            X: pd.DataFrame containing feature columns only.
+            y: pd.Series containing target labels.
+
+    Raises:
+        ModelInputError: If data is empty, target_column is missing, or no feature columns remain.
+    """
+    if not isinstance(data, pd.DataFrame):
+        raise TypeError(f"data must be a pandas DataFrame, got {type(data)}.")
+
+    if data.empty:
+        raise ModelInputError("Input DataFrame is empty (0 rows).")
+
+    if target_column not in data.columns:
+        raise ModelInputError(
+            f"Target column '{target_column}' not found in DataFrame columns: {list(data.columns)}."
+        )
+
+    y = data[target_column].copy()
+
+    if feature_columns is not None:
+        missing_cols = [c for c in feature_columns if c not in data.columns]
+        if missing_cols:
+            raise ModelInputError(
+                f"Specified feature columns not found in DataFrame: {missing_cols}."
+            )
+        X = data[feature_columns].copy()
+    else:
+        exclude_cols = [target_column]
+        if id_column and id_column in data.columns:
+            exclude_cols.append(id_column)
+        X = data.drop(columns=exclude_cols).copy()
+
+    if X.shape[1] == 0:
+        raise ModelInputError("No feature columns remaining after removing target and ID columns.")
+
+    return X, y
+
+
+# ===========================================================================
+# Voice Logistic Regression Classifier
+# ===========================================================================
+
+class VoiceLogisticRegression:
+    """
+    Baseline Logistic Regression classifier for voice modality stress/risk assessment.
+
+    Features:
+        - Scikit-learn LogisticRegression with configurable random_state and max_iter.
+        - Integrated StandardScaler for acoustic features.
+        - Strict validation of input types, feature names, and non-null values.
+        - Dynamic support for arbitrary user target labels (binary, multiclass, string, int).
+        - Predict class labels and calibrated class probability distributions.
+    """
+
+    def __init__(
+        self,
+        random_state: Optional[int] = MODEL_CONFIG.random_seed,
+        max_iter: int = 1000,
+        C: float = 1.0,
+        scale_features: bool = True,
+        solver: str = "lbfgs",
+        class_weight: Optional[Union[str, Dict[Any, float]]] = None,
+        config: ModelConfig = MODEL_CONFIG,
+        expected_feature_names: Optional[List[str]] = None,
+    ):
+        """
+        Initialize VoiceLogisticRegression baseline model.
+
+        Parameters:
+            random_state: Random seed for solver reproducibility (default: 42).
+            max_iter: Maximum iterations for solver convergence (default: 1000).
+            C: Inverse regularization strength (default: 1.0).
+            scale_features: Whether to apply StandardScaler to features before classification (default: True).
+            solver: Optimization algorithm (default: 'lbfgs').
+            class_weight: Weights associated with classes ('balanced' or dict).
+            config: Centralized ModelConfig settings.
+            expected_feature_names: Optional list of expected feature names. If None,
+                                   learned during fit() or defaults to COMBINED_FEATURE_NAMES.
+        """
+        self.random_state = random_state
+        self.max_iter = max_iter
+        self.C = C
+        self.scale_features = scale_features
+        self.solver = solver
+        self.class_weight = class_weight
+        self.config = config
+        self.expected_feature_names = (
+            list(expected_feature_names) if expected_feature_names is not None else None
+        )
+
+        # Internal estimators and attributes
+        self.scaler_: Optional[StandardScaler] = StandardScaler() if scale_features else None
+        self.classifier_: LogisticRegression = LogisticRegression(
+            random_state=self.random_state,
+            max_iter=self.max_iter,
+            C=self.C,
+            solver=self.solver,
+            class_weight=self.class_weight,
+        )
+        self.feature_names_: Optional[List[str]] = None
+        self.classes_: Optional[np.ndarray] = None
+        self.n_features_in_: Optional[int] = None
+        self.is_fitted_: bool = False
+
+    @property
+    def is_fitted(self) -> bool:
+        """Check if the classifier has been fitted."""
+        return self.is_fitted_
+
+    @property
+    def coef_(self) -> np.ndarray:
+        """Coefficients of the features in the decision function."""
+        self._check_is_fitted()
+        return self.classifier_.coef_
+
+    @property
+    def intercept_(self) -> np.ndarray:
+        """Intercept (bias) added to the decision function."""
+        self._check_is_fitted()
+        return self.classifier_.intercept_
+
+    def _check_is_fitted(self) -> None:
+        """Verify that the model has been fitted."""
+        if not self.is_fitted_ or self.classes_ is None:
+            raise ModelNotFittedError(
+                "This VoiceLogisticRegression instance is not fitted yet. "
+                "Call 'fit' with training data before using 'predict' or 'predict_proba'."
+            )
+
+    def _validate_features(
+        self,
+        X: Union[pd.DataFrame, np.ndarray, Dict[str, Any], List[Any]],
+        is_fit: bool = False,
+    ) -> np.ndarray:
+        """
+        Validate feature inputs and convert to 2D float32 numpy array.
+
+        Parameters:
+            X: Input features (DataFrame, ndarray, dict, or list).
+            is_fit: True if called during fit(), False if called during predict().
+
+        Returns:
+            2D numpy array of float32 features.
+
+        Raises:
+            ModelInputError: If dimensions, columns, or values are invalid.
+        """
+        # Handle dict input (e.g. CombinedFeatureDict or single row dict)
+        if isinstance(X, dict):
+            X = pd.DataFrame([X])
+
+        if isinstance(X, pd.DataFrame):
+            if X.empty:
+                raise ModelInputError("Input feature DataFrame is empty.")
+
+            # If fitting, learn or verify feature columns
+            if is_fit:
+                if self.expected_feature_names is not None:
+                    missing = [c for c in self.expected_feature_names if c not in X.columns]
+                    if missing:
+                        raise ModelInputError(
+                            f"Input DataFrame is missing expected feature columns: {missing}."
+                        )
+                    self.feature_names_ = list(self.expected_feature_names)
+                    X_ordered = X[self.feature_names_]
+                else:
+                    self.feature_names_ = list(X.columns)
+                    X_ordered = X
+            else:
+                # During prediction, ensure columns match fitted feature names
+                if self.feature_names_ is not None:
+                    missing = [c for c in self.feature_names_ if c not in X.columns]
+                    if missing:
+                        raise ModelInputError(
+                            f"Prediction input is missing fitted feature columns: {missing}."
+                        )
+                    X_ordered = X[self.feature_names_]
+                else:
+                    X_ordered = X
+
+            # Check numeric types
+            for col in X_ordered.columns:
+                if not np.issubdtype(X_ordered[col].dtype, np.number):
+                    raise ModelInputError(
+                        f"Feature column '{col}' has non-numeric dtype '{X_ordered[col].dtype}'."
+                    )
+
+            # Check for NaN / Inf
+            if X_ordered.isna().any().any():
+                raise ModelInputError("Input features contain NaN values.")
+
+            arr = X_ordered.to_numpy(dtype=np.float32)
+
+        elif isinstance(X, (np.ndarray, list)):
+            arr = np.asarray(X, dtype=np.float32)
+            if arr.size == 0:
+                raise ModelInputError("Input feature array is empty.")
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            elif arr.ndim != 2:
+                raise ModelInputError(
+                    f"Feature array must be 2D of shape (n_samples, n_features), got {arr.ndim}D array."
+                )
+
+            if not is_fit and self.n_features_in_ is not None and arr.shape[1] != self.n_features_in_:
+                raise ModelInputError(
+                    f"Number of features ({arr.shape[1]}) does not match fitted features ({self.n_features_in_})."
+                )
+
+            if is_fit and self.feature_names_ is None:
+                if self.expected_feature_names is not None and len(self.expected_feature_names) == arr.shape[1]:
+                    self.feature_names_ = list(self.expected_feature_names)
+                elif arr.shape[1] == len(COMBINED_FEATURE_NAMES):
+                    self.feature_names_ = list(COMBINED_FEATURE_NAMES)
+                else:
+                    self.feature_names_ = [f"feature_{i}" for i in range(arr.shape[1])]
+        else:
+            raise TypeError(
+                f"Unsupported features type: {type(X)}. "
+                "Expected pandas.DataFrame, numpy.ndarray, dict, or list."
+            )
+
+        if not np.all(np.isfinite(arr)):
+            raise ModelInputError("Feature matrix contains non-finite (NaN or Inf) values.")
+
+        return arr
+
+    def _validate_target(
+        self,
+        y: Union[pd.Series, np.ndarray, list],
+        n_samples: int,
+    ) -> np.ndarray:
+        """
+        Validate target labels.
+
+        Parameters:
+            y: Target label vector.
+            n_samples: Expected number of samples.
+
+        Returns:
+            1D numpy array of target labels.
+        """
+        if y is None:
+            raise ModelInputError("Target labels 'y' cannot be None.")
+
+        if isinstance(y, pd.Series):
+            if y.isna().any():
+                raise ModelInputError("Target vector contains null/NaN values.")
+            arr_y = y.to_numpy()
+        else:
+            arr_y = np.asarray(y)
+
+        if arr_y.size == 0:
+            raise ModelInputError("Target labels 'y' is empty.")
+
+        if arr_y.ndim != 1:
+            arr_y = arr_y.ravel()
+
+        if len(arr_y) != n_samples:
+            raise ModelInputError(
+                f"Sample count mismatch: features has {n_samples} samples but target has {len(arr_y)}."
+            )
+
+        # Ensure no null/empty strings
+        for val in arr_y:
+            if pd.isna(val) or val is None or (isinstance(val, str) and not val.strip()):
+                raise ModelInputError(f"Target contains invalid or empty label: '{val}'.")
+
+        distinct_classes = np.unique(arr_y)
+        if len(distinct_classes) < 2:
+            raise ModelInputError(
+                f"Target must contain at least 2 distinct classes for classification, "
+                f"got {len(distinct_classes)}: {list(distinct_classes)}."
+            )
+
+        return arr_y
+
+    def fit(
+        self,
+        X: Union[pd.DataFrame, np.ndarray],
+        y: Optional[Union[pd.Series, np.ndarray, list]] = None,
+        target_column: Optional[str] = None,
+        id_column: Optional[str] = MODEL_CONFIG.participant_id_column,
+    ) -> "VoiceLogisticRegression":
+        """
+        Fit the baseline Logistic Regression model and feature scaler.
+
+        Supports two usage styles:
+            1. Separated features and labels: fit(X, y)
+            2. Combined DataFrame: fit(df) with target_column specified or defaulted.
+
+        Parameters:
+            X: Feature matrix (DataFrame or 2D ndarray) or combined dataset DataFrame.
+            y: Target labels (Series, 1D ndarray, or list). If None, extracted from X.
+            target_column: Target column name if X is a combined DataFrame.
+            id_column: Participant ID column to exclude if X is a combined DataFrame.
+
+        Returns:
+            self: The fitted VoiceLogisticRegression instance.
+        """
+        # If y is None and X is a DataFrame, attempt to separate target
+        if y is None and isinstance(X, pd.DataFrame):
+            lbl_col = target_column or self.config.label_column
+            X_feats, y_target = separate_features_and_target(
+                data=X,
+                target_column=lbl_col,
+                id_column=id_column,
+                feature_columns=self.expected_feature_names,
+            )
+        else:
+            X_feats = X
+            y_target = y
+
+        # Validate features and target
+        X_arr = self._validate_features(X_feats, is_fit=True)
+        y_arr = self._validate_target(y_target, n_samples=X_arr.shape[0])
+
+        self.n_features_in_ = X_arr.shape[1]
+
+        # Fit feature scaler if enabled
+        if self.scale_features:
+            self.scaler_ = StandardScaler()
+            X_scaled = self.scaler_.fit_transform(X_arr)
+        else:
+            self.scaler_ = None
+            X_scaled = X_arr
+
+        # Fit scikit-learn Logistic Regression
+        self.classifier_.fit(X_scaled, y_arr)
+
+        self.classes_ = self.classifier_.classes_
+        self.is_fitted_ = True
+
+        return self
+
+    def predict(
+        self,
+        X: Union[pd.DataFrame, np.ndarray, Dict[str, Any], List[Any]],
+    ) -> np.ndarray:
+        """
+        Predict class labels for given acoustic features.
+
+        Parameters:
+            X: Features matrix of shape (n_samples, n_features) or single-sample dict/array.
+
+        Returns:
+            1D numpy array of predicted class labels.
+        """
+        self._check_is_fitted()
+        X_arr = self._validate_features(X, is_fit=False)
+
+        if self.scale_features and self.scaler_ is not None:
+            X_scaled = self.scaler_.transform(X_arr)
+        else:
+            X_scaled = X_arr
+
+        preds = self.classifier_.predict(X_scaled)
+        return preds
+
+    def predict_proba(
+        self,
+        X: Union[pd.DataFrame, np.ndarray, Dict[str, Any], List[Any]],
+    ) -> np.ndarray:
+        """
+        Compute class probabilities for given acoustic features.
+
+        Parameters:
+            X: Features matrix of shape (n_samples, n_features) or single-sample dict/array.
+
+        Returns:
+            2D numpy array of shape (n_samples, n_classes) where values sum to 1.0.
+        """
+        self._check_is_fitted()
+        X_arr = self._validate_features(X, is_fit=False)
+
+        if self.scale_features and self.scaler_ is not None:
+            X_scaled = self.scaler_.transform(X_arr)
+        else:
+            X_scaled = X_arr
+
+        proba = self.classifier_.predict_proba(X_scaled)
+        return proba
+
+    def predict_proba_dict(
+        self,
+        X: Union[pd.DataFrame, np.ndarray, Dict[str, Any], List[Any]],
+    ) -> List[Dict[Any, float]]:
+        """
+        Predict class probabilities and return as a list of dictionaries mapping class names to probabilities.
+
+        Parameters:
+            X: Features matrix or single sample.
+
+        Returns:
+            List of dicts, one per sample, e.g. [{'low': 0.85, 'high': 0.15}, ...]
+        """
+        self._check_is_fitted()
+        proba = self.predict_proba(X)
+        classes = self.classes_
+
+        results: List[Dict[Any, float]] = []
+        for row in proba:
+            results.append({cls: float(prob) for cls, prob in zip(classes, row)})
+        return results
+
+
+# Aliases for classifier naming flexibility
+VoiceBaselineClassifier = VoiceLogisticRegression
+VoiceLogisticRegressionClassifier = VoiceLogisticRegression

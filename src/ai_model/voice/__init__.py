@@ -120,5 +120,15 @@ from .dataset import (
     load_voice_dataset,
     save_voice_dataset,
 )
+from .model import (
+    ModelError,
+    ModelInputError,
+    ModelNotFittedError,
+    VoiceBaselineClassifier,
+    VoiceLogisticRegression,
+    VoiceLogisticRegressionClassifier,
+    separate_features_and_target,
+)
+
 
 
