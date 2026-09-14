@@ -64,4 +64,14 @@ from .preprocessing import (
     resample_audio,
     trim_silence,
 )
+from .features import (
+    FeatureExtractionError,
+    VoiceFeatureExtractor,
+    compute_mfcc_frames,
+    extract_mfcc,
+    extract_mfcc_dict,
+    extract_mfcc_features,
+    get_mfcc_feature_names,
+)
+
 

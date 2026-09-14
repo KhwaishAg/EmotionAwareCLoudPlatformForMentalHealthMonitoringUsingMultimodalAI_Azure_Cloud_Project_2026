@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 import scipy.io.wavfile as wavfile
 
-from src.ai_model.voice.config import AUDIO_CONFIG, AudioConfig
+from src.ai_model.voice.config import AUDIO_CONFIG, FEATURE_CONFIG, AudioConfig, FeatureConfig
 from src.ai_model.voice.recording import (
     STANDARDIZED_RECORDING_PROMPT,
     AudioChannelError,
@@ -46,7 +46,6 @@ from src.ai_model.voice.recording import (
     save_wav_file,
     validate_audio_file,
     validate_audio_recording,
-
 )
 from src.ai_model.voice.preprocessing import (
     PreprocessedAudio,
@@ -56,6 +55,15 @@ from src.ai_model.voice.preprocessing import (
     preprocess_audio,
     resample_audio,
     trim_silence,
+)
+from src.ai_model.voice.features import (
+    FeatureExtractionError,
+    VoiceFeatureExtractor,
+    compute_mfcc_frames,
+    extract_mfcc,
+    extract_mfcc_dict,
+    extract_mfcc_features,
+    get_mfcc_feature_names,
 )
 
 
@@ -1012,6 +1020,206 @@ def test_voice_preprocessor_trim_silence_method():
     assert leading > 0
     assert trailing > 0
     assert len(trimmed) < len(audio)
+
+
+# ===========================================================================
+# Tests — MFCC Feature Extraction (Commit 8)
+# ===========================================================================
+
+def test_extract_mfcc_shape_default_13():
+    """Verify default MFCC extraction produces fixed-length 26-element vector (13 mean + 13 std)."""
+    sr = 16_000
+    t = np.linspace(0, 5.0, sr * 5, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.8).astype(np.float32)
+
+    features = extract_mfcc_features(audio, sample_rate=sr)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (26,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+
+def test_extract_mfcc_shape_custom_n_mfcc():
+    """Verify configurable n_mfcc parameter controls output feature dimensionality."""
+    sr = 16_000
+    t = np.linspace(0, 3.0, sr * 3, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.8).astype(np.float32)
+
+    # Custom n_mfcc = 20 -> 20 means + 20 stds = 40 features
+    features_20 = extract_mfcc_features(audio, sample_rate=sr, n_mfcc=20)
+    assert features_20.shape == (40,)
+    assert features_20.dtype == np.float32
+
+    # Custom FeatureConfig with n_mfcc = 10 -> 20 features
+    custom_cfg = FeatureConfig(n_mfcc=10)
+    features_10 = extract_mfcc_features(audio, sample_rate=sr, config=custom_cfg)
+    assert features_10.shape == (20,)
+
+
+def test_extract_mfcc_determinism():
+    """Verify identical audio input produces identical MFCC feature vectors."""
+    sr = 16_000
+    t = np.linspace(0, 4.0, sr * 4, endpoint=False)
+    audio = (np.sin(2 * np.pi * 300 * t) * 0.5 + np.sin(2 * np.pi * 600 * t) * 0.3).astype(np.float32)
+
+    f1 = extract_mfcc_features(audio, sample_rate=sr)
+    f2 = extract_mfcc_features(audio, sample_rate=sr)
+
+    assert np.array_equal(f1, f2)
+
+
+def test_extract_mfcc_from_preprocessed_audio(synthetic_wav_file: Path):
+    """Verify MFCC extraction directly accepts PreprocessedAudio container."""
+    preprocessed = preprocess_audio(synthetic_wav_file)
+
+    features = extract_mfcc_features(preprocessed)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (26,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+
+def test_extract_mfcc_from_audio_recording(synthetic_wav_file: Path):
+    """Verify MFCC extraction directly accepts AudioRecording container."""
+    recording = load_wav_file(synthetic_wav_file)
+
+    features = extract_mfcc_features(recording)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (26,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+
+def test_extract_mfcc_completely_silent_audio():
+    """Verify completely silent audio produces finite MFCC features without error."""
+    sr = 16_000
+    silent_audio = np.zeros(sr * 4, dtype=np.float32)
+
+    features = extract_mfcc_features(silent_audio, sample_rate=sr)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (26,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+
+def test_extract_mfcc_invalid_inputs():
+    """Verify robust validation against empty, non-finite, multi-dimensional, and invalid inputs."""
+    # Empty audio
+    with pytest.raises(AudioDataError, match="empty"):
+        extract_mfcc_features(np.array([], dtype=np.float32))
+
+    # Non-finite values (NaN / Inf)
+    with pytest.raises(AudioDataError, match="non-finite"):
+        extract_mfcc_features(np.array([0.1, np.nan, 0.3], dtype=np.float32))
+
+    with pytest.raises(AudioDataError, match="non-finite"):
+        extract_mfcc_features(np.array([0.1, np.inf, 0.3], dtype=np.float32))
+
+    # 2D stereo input (should be 1D mono)
+    with pytest.raises(AudioDataError, match="1D"):
+        extract_mfcc_features(np.zeros((16000, 2), dtype=np.float32))
+
+    # Invalid sample rate
+    with pytest.raises(AudioSampleRateError, match="positive"):
+        extract_mfcc_features(np.ones(1000, dtype=np.float32), sample_rate=0)
+
+    with pytest.raises(AudioSampleRateError, match="positive"):
+        extract_mfcc_features(np.ones(1000, dtype=np.float32), sample_rate=-16000)
+
+    # Invalid n_mfcc
+    with pytest.raises(ValueError, match="positive"):
+        extract_mfcc_features(np.ones(1000, dtype=np.float32), n_mfcc=0)
+
+    with pytest.raises(ValueError, match="positive"):
+        extract_mfcc_features(np.ones(1000, dtype=np.float32), n_mfcc=-5)
+
+    # Unsupported input type
+    with pytest.raises(TypeError, match="Unsupported audio input type"):
+        extract_mfcc_features("not_audio_data")  # type: ignore
+
+
+def test_get_mfcc_feature_names():
+    """Verify feature names generation matches expected format and count."""
+    names_13 = get_mfcc_feature_names(n_mfcc=13)
+    assert len(names_13) == 26
+    assert names_13[0] == "mfcc_1_mean"
+    assert names_13[12] == "mfcc_13_mean"
+    assert names_13[13] == "mfcc_1_std"
+    assert names_13[25] == "mfcc_13_std"
+
+    names_20 = get_mfcc_feature_names(n_mfcc=20)
+    assert len(names_20) == 40
+    assert names_20[0] == "mfcc_1_mean"
+    assert names_20[19] == "mfcc_20_mean"
+    assert names_20[20] == "mfcc_1_std"
+    assert names_20[39] == "mfcc_20_std"
+
+    with pytest.raises(ValueError, match="positive"):
+        get_mfcc_feature_names(n_mfcc=0)
+
+
+def test_extract_mfcc_dict():
+    """Verify extract_mfcc_dict returns mapping of feature names to float values."""
+    sr = 16_000
+    t = np.linspace(0, 3.0, sr * 3, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.7).astype(np.float32)
+
+    feat_dict = extract_mfcc_dict(audio, sample_rate=sr)
+
+    assert isinstance(feat_dict, dict)
+    assert len(feat_dict) == 26
+    assert "mfcc_1_mean" in feat_dict
+    assert "mfcc_13_mean" in feat_dict
+    assert "mfcc_1_std" in feat_dict
+    assert "mfcc_13_std" in feat_dict
+    for k, v in feat_dict.items():
+        assert isinstance(k, str)
+        assert isinstance(v, float)
+        assert np.isfinite(v)
+
+
+def test_compute_mfcc_frames():
+    """Verify compute_mfcc_frames produces 2D time-frequency matrix."""
+    sr = 16_000
+    t = np.linspace(0, 2.0, sr * 2, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.6).astype(np.float32)
+
+    frames = compute_mfcc_frames(audio, sample_rate=sr, n_mfcc=13)
+
+    assert isinstance(frames, np.ndarray)
+    assert frames.ndim == 2
+    assert frames.shape[0] == 13
+    assert frames.shape[1] > 0
+    assert frames.dtype == np.float32
+
+
+def test_voice_feature_extractor_controller():
+    """Verify VoiceFeatureExtractor controller exposes modular methods and configurations."""
+    extractor = VoiceFeatureExtractor()
+    sr = 16_000
+    t = np.linspace(0, 3.0, sr * 3, endpoint=False)
+    audio = (np.sin(2 * np.pi * 500 * t) * 0.5).astype(np.float32)
+
+    # Controller feature extraction
+    features = extractor.extract_features(audio, sample_rate=sr)
+    assert features.shape == (26,)
+
+    # Controller dict extraction
+    feat_dict = extractor.extract_dict(audio, sample_rate=sr)
+    assert len(feat_dict) == 26
+
+    # Controller frame computation
+    frames = extractor.compute_frames(audio, sample_rate=sr)
+    assert frames.shape[0] == 13
+
+    # Controller feature names
+    names = extractor.get_feature_names()
+    assert len(names) == 26
+
 
 
 
