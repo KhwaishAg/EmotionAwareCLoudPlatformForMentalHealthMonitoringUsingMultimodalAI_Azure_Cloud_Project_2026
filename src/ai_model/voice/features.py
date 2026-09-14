@@ -1,5 +1,5 @@
 """
-Voice Modality — Acoustic Feature Extraction: MFCC, Pitch & Energy Extraction
+Voice Modality — Acoustic Feature Extraction: MFCC, Pitch, Energy & Spectral Extraction
 
 Extracts acoustic feature representations from preprocessed 16 kHz mono
 audio signals for stress and risk classification models.
@@ -12,6 +12,8 @@ Features Implemented:
       only (fixed-length 4D).
     - Root Mean Square (RMS) Energy: Frame-level energy contour aggregated
       using mean, standard deviation, and variation/range (fixed-length 3D).
+    - Spectral Descriptors: Spectral centroid, spectral bandwidth, spectral rolloff,
+      and zero-crossing rate aggregated using mean and standard deviation (fixed-length 8D).
     - Robust unvoiced/silent audio handling without NaN or Inf values.
     - Reusable controller (VoiceFeatureExtractor) and functional APIs.
 
@@ -20,7 +22,7 @@ Specifications adhere to:
     - Input: 16 kHz, mono, 1D float32 waveform (or PreprocessedAudio/AudioRecording)
 
 Note:
-    - Spectral descriptors and ML modeling are deferred to subsequent commits.
+    - ML modeling and multimodal fusion are deferred to subsequent commits.
 """
 
 from dataclasses import dataclass, field
@@ -69,6 +71,17 @@ ENERGY_FEATURE_NAMES: Tuple[str, ...] = (
     "energy_mean",
     "energy_std",
     "energy_range",
+)
+
+SPECTRAL_FEATURE_NAMES: Tuple[str, ...] = (
+    "spectral_centroid_mean",
+    "spectral_centroid_std",
+    "spectral_bandwidth_mean",
+    "spectral_bandwidth_std",
+    "spectral_rolloff_mean",
+    "spectral_rolloff_std",
+    "zero_crossing_rate_mean",
+    "zero_crossing_rate_std",
 )
 
 
@@ -134,6 +147,52 @@ class EnergyFeatureDict(dict):
             return super().__getitem__("energy_mean")
         if key == "energy_rms_std" and "energy_std" in self:
             return super().__getitem__("energy_std")
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+
+def get_spectral_feature_names() -> List[str]:
+    """
+    Generate standard feature column names for aggregated spectral feature vectors.
+
+    Returns:
+        List of spectral feature names (length 8):
+        ['spectral_centroid_mean', 'spectral_centroid_std',
+         'spectral_bandwidth_mean', 'spectral_bandwidth_std',
+         'spectral_rolloff_mean', 'spectral_rolloff_std',
+         'zero_crossing_rate_mean', 'zero_crossing_rate_std'].
+    """
+    return list(SPECTRAL_FEATURE_NAMES)
+
+
+class SpectralFeatureDict(dict):
+    """
+    Dictionary container for spectral features.
+    Provides transparent access for standard names and convenient aliases
+    (e.g., 'zcr_mean' for 'zero_crossing_rate_mean').
+    """
+
+    _ALIASES = {
+        "zcr_mean": "zero_crossing_rate_mean",
+        "zcr_std": "zero_crossing_rate_std",
+        "centroid_mean": "spectral_centroid_mean",
+        "centroid_std": "spectral_centroid_std",
+        "bandwidth_mean": "spectral_bandwidth_mean",
+        "bandwidth_std": "spectral_bandwidth_std",
+        "rolloff_mean": "spectral_rolloff_mean",
+        "rolloff_std": "spectral_rolloff_std",
+    }
+
+    def __getitem__(self, key: str) -> float:
+        if key in self:
+            return super().__getitem__(key)
+        if key in self._ALIASES and self._ALIASES[key] in self:
+            return super().__getitem__(self._ALIASES[key])
         return super().__getitem__(key)
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -692,6 +751,259 @@ def extract_energy_dict(
 
 
 # ===========================================================================
+# Frame-Level Spectral Feature Extraction
+# ===========================================================================
+
+def compute_spectral_frames(
+    audio_data: np.ndarray,
+    sample_rate: int = AUDIO_CONFIG.target_sample_rate,
+    config: FeatureConfig = FEATURE_CONFIG,
+    n_fft: Optional[int] = None,
+    hop_length: Optional[int] = None,
+    roll_percent: float = 0.85,
+) -> Dict[str, np.ndarray]:
+    """
+    Compute frame-level spectral descriptors from an audio waveform.
+
+    Calculates:
+        - spectral_centroid: Center of mass of the spectrum per frame (Hz)
+        - spectral_bandwidth: Spectral spread around the centroid per frame (Hz)
+        - spectral_rolloff: Frequency below which roll_percent of energy lies (Hz)
+        - zero_crossing_rate: Rate of sign changes in the signal per frame
+
+    Parameters:
+        audio_data: 1D numpy array of audio samples.
+        sample_rate: Audio sampling frequency in Hz (default: 16,000 Hz).
+        config: FeatureConfig settings.
+        n_fft: Window / FFT length (default: config.spectral_n_fft = 2048).
+        hop_length: Hop length between frames (default: config.spectral_hop_length = 512).
+        roll_percent: Roll-off percentage (default: 0.85).
+
+    Returns:
+        Dictionary mapping descriptor names to 2D numpy arrays of shape (1, n_frames).
+
+    Raises:
+        AudioDataError: If audio_data is empty, non-finite, or not 1D mono.
+        AudioSampleRateError: If sample_rate <= 0.
+        ValueError: If n_fft, hop_length, or roll_percent are invalid.
+    """
+    if not isinstance(audio_data, np.ndarray):
+        raise AudioDataError(f"audio_data must be a numpy.ndarray, got {type(audio_data)}.")
+
+    if audio_data.size == 0:
+        raise AudioDataError("audio_data is empty.")
+
+    if audio_data.ndim != 1:
+        raise AudioDataError(
+            f"audio_data must be a 1D mono array, got shape {audio_data.shape} with {audio_data.ndim} dimensions."
+        )
+
+    if not np.all(np.isfinite(audio_data)):
+        raise AudioDataError("audio_data contains NaN or Inf values.")
+
+    if sample_rate <= 0:
+        raise AudioSampleRateError(
+            f"sample_rate must be a positive integer, got {sample_rate}."
+        )
+
+    fft_len = n_fft if n_fft is not None else config.spectral_n_fft
+    hop = hop_length if hop_length is not None else config.spectral_hop_length
+
+    if fft_len <= 0:
+        raise ValueError(f"n_fft must be a positive integer, got {fft_len}.")
+    if hop <= 0:
+        raise ValueError(f"hop_length must be a positive integer, got {hop}.")
+    if not (0.0 < roll_percent <= 1.0):
+        raise ValueError(f"roll_percent must be in (0.0, 1.0], got {roll_percent}.")
+
+    # Pad if shorter than n_fft
+    y_float = audio_data.astype(np.float32)
+    if y_float.shape[0] < fft_len:
+        pad_len = fft_len - y_float.shape[0]
+        y_proc = np.pad(y_float, (0, pad_len), mode="constant")
+    else:
+        y_proc = y_float
+
+    centroid = librosa.feature.spectral_centroid(
+        y=y_proc,
+        sr=sample_rate,
+        n_fft=fft_len,
+        hop_length=hop,
+    )
+    bandwidth = librosa.feature.spectral_bandwidth(
+        y=y_proc,
+        sr=sample_rate,
+        n_fft=fft_len,
+        hop_length=hop,
+    )
+    rolloff = librosa.feature.spectral_rolloff(
+        y=y_proc,
+        sr=sample_rate,
+        n_fft=fft_len,
+        hop_length=hop,
+        roll_percent=roll_percent,
+    )
+    zcr = librosa.feature.zero_crossing_rate(
+        y=y_proc,
+        frame_length=fft_len,
+        hop_length=hop,
+    )
+
+    return {
+        "spectral_centroid": centroid.astype(np.float32),
+        "spectral_bandwidth": bandwidth.astype(np.float32),
+        "spectral_rolloff": rolloff.astype(np.float32),
+        "zero_crossing_rate": zcr.astype(np.float32),
+    }
+
+
+# ===========================================================================
+# Aggregated Spectral Feature Extraction
+# ===========================================================================
+
+def extract_spectral_features(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    n_fft: Optional[int] = None,
+    hop_length: Optional[int] = None,
+    roll_percent: float = 0.85,
+) -> np.ndarray:
+    """
+    Extract fixed-length spectral features from an audio recording or waveform.
+
+    Descriptors Extracted:
+        1. Spectral Centroid (mean, std)
+        2. Spectral Bandwidth (mean, std)
+        3. Spectral Rolloff (mean, std)
+        4. Zero-Crossing Rate (mean, std)
+
+    Returns a fixed-length 1D float32 array of shape (8,):
+    [centroid_mean, centroid_std, bandwidth_mean, bandwidth_std,
+     rolloff_mean, rolloff_std, zcr_mean, zcr_std].
+
+    Handles silent audio safely without producing NaN or Inf values.
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio container, or AudioRecording container.
+        sample_rate: Audio sampling rate in Hz (defaults to container rate or 16,000 Hz).
+        config: FeatureConfig extraction settings.
+        n_fft: FFT window size (default: config.spectral_n_fft = 2048).
+        hop_length: Hop length between frames (default: config.spectral_hop_length = 512).
+        roll_percent: Spectral roll-off percentage (default: 0.85).
+
+    Returns:
+        1D numpy array of shape (8,) with float32 dtype.
+
+    Raises:
+        AudioDataError: If audio is empty, non-finite, or not 1D mono.
+        AudioSampleRateError: If sample rate <= 0.
+        ValueError: If n_fft or hop_length <= 0.
+        TypeError: If audio is not a supported input type.
+    """
+    if isinstance(audio, PreprocessedAudio):
+        audio_data = audio.audio_data
+        sr = sample_rate if sample_rate is not None else audio.sample_rate
+    elif isinstance(audio, AudioRecording):
+        audio_data = audio.audio_data
+        sr = sample_rate if sample_rate is not None else audio.sample_rate
+    elif isinstance(audio, np.ndarray):
+        audio_data = audio
+        sr = sample_rate if sample_rate is not None else AUDIO_CONFIG.target_sample_rate
+    else:
+        raise TypeError(
+            f"Unsupported audio input type: {type(audio)}. "
+            "Expected np.ndarray, PreprocessedAudio, or AudioRecording."
+        )
+
+    frames = compute_spectral_frames(
+        audio_data=audio_data,
+        sample_rate=sr,
+        config=config,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        roll_percent=roll_percent,
+    )
+
+    if len(audio_data) == 0 or np.max(np.abs(audio_data)) == 0.0:
+        return np.zeros(len(SPECTRAL_FEATURE_NAMES), dtype=np.float32)
+
+    centroid_frames = frames["spectral_centroid"].flatten()
+    bandwidth_frames = frames["spectral_bandwidth"].flatten()
+    rolloff_frames = frames["spectral_rolloff"].flatten()
+    zcr_frames = frames["zero_crossing_rate"].flatten()
+
+    def _safe_mean_std(arr: np.ndarray) -> Tuple[float, float]:
+        if len(arr) == 0:
+            return 0.0, 0.0
+        finite_vals = arr[np.isfinite(arr)]
+        if len(finite_vals) == 0:
+            return 0.0, 0.0
+        return float(np.mean(finite_vals)), float(np.std(finite_vals))
+
+    c_mean, c_std = _safe_mean_std(centroid_frames)
+    b_mean, b_std = _safe_mean_std(bandwidth_frames)
+    r_mean, r_std = _safe_mean_std(rolloff_frames)
+    z_mean, z_std = _safe_mean_std(zcr_frames)
+
+    feature_vec = np.array([
+        c_mean, c_std,
+        b_mean, b_std,
+        r_mean, r_std,
+        z_mean, z_std,
+    ], dtype=np.float32)
+
+    return np.nan_to_num(feature_vec, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
+
+# Alias for concise API usage
+extract_spectral = extract_spectral_features
+
+
+def extract_spectral_dict(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    n_fft: Optional[int] = None,
+    hop_length: Optional[int] = None,
+    roll_percent: float = 0.85,
+) -> SpectralFeatureDict:
+    """
+    Extract fixed-length spectral features and return them as a SpectralFeatureDict.
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio, or AudioRecording.
+        sample_rate: Audio sampling frequency in Hz.
+        config: FeatureConfig settings.
+        n_fft: FFT window size.
+        hop_length: Hop length.
+        roll_percent: Roll-off percentage.
+
+    Returns:
+        SpectralFeatureDict mapping feature names to float values.
+    """
+    features = extract_spectral_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        roll_percent=roll_percent,
+    )
+
+    return SpectralFeatureDict({
+        "spectral_centroid_mean": float(features[0]),
+        "spectral_centroid_std": float(features[1]),
+        "spectral_bandwidth_mean": float(features[2]),
+        "spectral_bandwidth_std": float(features[3]),
+        "spectral_rolloff_mean": float(features[4]),
+        "spectral_rolloff_std": float(features[5]),
+        "zero_crossing_rate_mean": float(features[6]),
+        "zero_crossing_rate_std": float(features[7]),
+    })
+
+
+# ===========================================================================
 # Reusable Feature Extractor Controller
 # ===========================================================================
 
@@ -868,4 +1180,65 @@ class VoiceFeatureExtractor:
             config=self.config,
             frame_length=frame_length,
             hop_length=hop_length,
+        )
+
+    # --- Spectral Methods ---
+
+    def get_spectral_feature_names(self) -> List[str]:
+        """Get list of spectral feature names."""
+        return get_spectral_feature_names()
+
+    def compute_spectral_frames(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: Optional[int] = None,
+        n_fft: Optional[int] = None,
+        hop_length: Optional[int] = None,
+        roll_percent: float = 0.85,
+    ) -> Dict[str, np.ndarray]:
+        """Compute frame-level spectral descriptor matrices."""
+        sr = sample_rate if sample_rate is not None else self.audio_config.target_sample_rate
+        return compute_spectral_frames(
+            audio_data=audio_data,
+            sample_rate=sr,
+            config=self.config,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            roll_percent=roll_percent,
+        )
+
+    def extract_spectral(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        n_fft: Optional[int] = None,
+        hop_length: Optional[int] = None,
+        roll_percent: float = 0.85,
+    ) -> np.ndarray:
+        """Extract fixed-length spectral feature vector."""
+        return extract_spectral_features(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            roll_percent=roll_percent,
+        )
+
+    def extract_spectral_dict(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        n_fft: Optional[int] = None,
+        hop_length: Optional[int] = None,
+        roll_percent: float = 0.85,
+    ) -> SpectralFeatureDict:
+        """Extract fixed-length spectral features as a SpectralFeatureDict."""
+        return extract_spectral_dict(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            roll_percent=roll_percent,
         )

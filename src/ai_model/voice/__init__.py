@@ -67,12 +67,15 @@ from .preprocessing import (
 from .features import (
     ENERGY_FEATURE_NAMES,
     PITCH_FEATURE_NAMES,
+    SPECTRAL_FEATURE_NAMES,
     EnergyFeatureDict,
     FeatureExtractionError,
+    SpectralFeatureDict,
     VoiceFeatureExtractor,
     compute_energy_frames,
     compute_mfcc_frames,
     compute_pitch_frames,
+    compute_spectral_frames,
     extract_energy,
     extract_energy_dict,
     extract_energy_features,
@@ -82,9 +85,13 @@ from .features import (
     extract_pitch,
     extract_pitch_dict,
     extract_pitch_features,
+    extract_spectral,
+    extract_spectral_dict,
+    extract_spectral_features,
     get_energy_feature_names,
     get_mfcc_feature_names,
     get_pitch_feature_names,
+    get_spectral_feature_names,
 )
 
 

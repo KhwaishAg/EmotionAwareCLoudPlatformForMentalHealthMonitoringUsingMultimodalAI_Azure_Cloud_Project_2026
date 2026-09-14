@@ -59,12 +59,15 @@ from src.ai_model.voice.preprocessing import (
 from src.ai_model.voice.features import (
     ENERGY_FEATURE_NAMES,
     PITCH_FEATURE_NAMES,
+    SPECTRAL_FEATURE_NAMES,
     EnergyFeatureDict,
     FeatureExtractionError,
+    SpectralFeatureDict,
     VoiceFeatureExtractor,
     compute_energy_frames,
     compute_mfcc_frames,
     compute_pitch_frames,
+    compute_spectral_frames,
     extract_energy,
     extract_energy_dict,
     extract_energy_features,
@@ -74,9 +77,13 @@ from src.ai_model.voice.features import (
     extract_pitch,
     extract_pitch_dict,
     extract_pitch_features,
+    extract_spectral,
+    extract_spectral_dict,
+    extract_spectral_features,
     get_energy_feature_names,
     get_mfcc_feature_names,
     get_pitch_feature_names,
+    get_spectral_feature_names,
 )
 
 
@@ -1597,6 +1604,223 @@ def test_mfcc_and_pitch_behavior_unmodified():
 
     pitch_feats = extract_pitch_features(audio, sample_rate=sr)
     assert pitch_feats.shape == (4,)
+
+
+# ===========================================================================
+# Spectral Feature Extraction Tests (Commit 11)
+# ===========================================================================
+
+def test_extract_spectral_normal_audio():
+    """Verify extract_spectral_features produces 8-dim float32 vector with positive values."""
+    sr = 16_000
+    t = np.linspace(0, 2.0, sr * 2, endpoint=False)
+    # Mix of two frequencies
+    audio = (0.6 * np.sin(2 * np.pi * 440 * t) + 0.3 * np.sin(2 * np.pi * 880 * t)).astype(np.float32)
+
+    features = extract_spectral_features(audio, sample_rate=sr)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (8,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+    # Check that spectral centroid, bandwidth, rolloff, and zcr means are positive
+    centroid_mean = features[0]
+    bandwidth_mean = features[2]
+    rolloff_mean = features[4]
+    zcr_mean = features[6]
+
+    assert centroid_mean > 0.0
+    assert bandwidth_mean > 0.0
+    assert rolloff_mean > 0.0
+    assert zcr_mean > 0.0
+
+
+def test_extract_spectral_silent_audio():
+    """Verify extract_spectral_features handles complete silence safely without NaN/Inf."""
+    sr = 16_000
+    silent_audio = np.zeros(sr * 2, dtype=np.float32)
+
+    features = extract_spectral_features(silent_audio, sample_rate=sr)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (8,)
+    assert features.dtype == np.float32
+    assert np.all(features == 0.0)
+    assert not np.any(np.isnan(features))
+    assert not np.any(np.isinf(features))
+
+
+def test_extract_spectral_from_preprocessed_audio(synthetic_wav_file: Path):
+    """Verify extract_spectral_features accepts PreprocessedAudio container."""
+    preprocessed = preprocess_audio(synthetic_wav_file)
+
+    features = extract_spectral_features(preprocessed)
+    assert features.shape == (8,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+
+def test_extract_spectral_from_audio_recording():
+    """Verify extract_spectral_features accepts AudioRecording container."""
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 500 * t) * 0.8).astype(np.float32)
+    rec = AudioRecording(audio_data=audio, sample_rate=sr, channels=1, duration_seconds=1.0)
+
+    features = extract_spectral_features(rec)
+    assert features.shape == (8,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+
+def test_extract_spectral_invalid_inputs():
+    """Verify input validation handles empty, non-finite, multidimensional, and bad params."""
+    # Empty audio
+    with pytest.raises(AudioDataError, match="empty"):
+        extract_spectral_features(np.array([], dtype=np.float32))
+
+    # NaN / Inf audio
+    with pytest.raises(AudioDataError, match="NaN or Inf"):
+        extract_spectral_features(np.array([0.1, np.nan, 0.3], dtype=np.float32))
+
+    with pytest.raises(AudioDataError, match="NaN or Inf"):
+        extract_spectral_features(np.array([0.1, np.inf, 0.3], dtype=np.float32))
+
+    # Multidimensional audio
+    with pytest.raises(AudioDataError, match="1D mono"):
+        extract_spectral_features(np.zeros((16000, 2), dtype=np.float32))
+
+    # Invalid sample rate
+    with pytest.raises(AudioSampleRateError, match="positive"):
+        extract_spectral_features(np.ones(1000, dtype=np.float32), sample_rate=0)
+
+    # Invalid n_fft or hop_length
+    with pytest.raises(ValueError, match="positive"):
+        extract_spectral_features(np.ones(1000, dtype=np.float32), n_fft=-2048)
+
+    with pytest.raises(ValueError, match="positive"):
+        extract_spectral_features(np.ones(1000, dtype=np.float32), hop_length=0)
+
+    with pytest.raises(ValueError, match="roll_percent"):
+        extract_spectral_features(np.ones(1000, dtype=np.float32), roll_percent=0.0)
+
+    # Unsupported type
+    with pytest.raises(TypeError, match="Unsupported audio input type"):
+        extract_spectral_features("not_audio")  # type: ignore
+
+
+def test_get_spectral_feature_names():
+    """Verify spectral feature names list and order."""
+    names = get_spectral_feature_names()
+    assert len(names) == 8
+    expected = [
+        "spectral_centroid_mean",
+        "spectral_centroid_std",
+        "spectral_bandwidth_mean",
+        "spectral_bandwidth_std",
+        "spectral_rolloff_mean",
+        "spectral_rolloff_std",
+        "zero_crossing_rate_mean",
+        "zero_crossing_rate_std",
+    ]
+    assert names == expected
+    assert tuple(names) == SPECTRAL_FEATURE_NAMES
+
+
+def test_extract_spectral_dict():
+    """Verify extract_spectral_dict produces dictionary output with alias support."""
+    sr = 16_000
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.7).astype(np.float32)
+
+    feat_dict = extract_spectral_dict(audio, sample_rate=sr)
+
+    assert isinstance(feat_dict, dict)
+    assert len(feat_dict) == 8
+
+    for name in SPECTRAL_FEATURE_NAMES:
+        assert name in feat_dict
+        assert isinstance(feat_dict[name], float)
+        assert np.isfinite(feat_dict[name])
+
+    # Verify alias lookups
+    assert feat_dict["zcr_mean"] == feat_dict["zero_crossing_rate_mean"]
+    assert feat_dict["zcr_std"] == feat_dict["zero_crossing_rate_std"]
+    assert feat_dict["centroid_mean"] == feat_dict["spectral_centroid_mean"]
+    assert feat_dict["centroid_std"] == feat_dict["spectral_centroid_std"]
+    assert feat_dict["bandwidth_mean"] == feat_dict["spectral_bandwidth_mean"]
+    assert feat_dict["bandwidth_std"] == feat_dict["spectral_bandwidth_std"]
+    assert feat_dict["rolloff_mean"] == feat_dict["spectral_rolloff_mean"]
+    assert feat_dict["rolloff_std"] == feat_dict["spectral_rolloff_std"]
+
+    assert feat_dict.get("zcr_mean") == feat_dict["zero_crossing_rate_mean"]
+    assert feat_dict.get("nonexistent", 99.0) == 99.0
+
+
+def test_compute_spectral_frames():
+    """Verify compute_spectral_frames returns frame matrices for all 4 descriptors."""
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.6).astype(np.float32)
+
+    frames = compute_spectral_frames(audio, sample_rate=sr)
+
+    assert isinstance(frames, dict)
+    assert len(frames) == 4
+    for key in ("spectral_centroid", "spectral_bandwidth", "spectral_rolloff", "zero_crossing_rate"):
+        assert key in frames
+        mat = frames[key]
+        assert isinstance(mat, np.ndarray)
+        assert mat.ndim == 2
+        assert mat.shape[0] == 1
+        assert mat.shape[1] > 0
+        assert mat.dtype == np.float32
+        assert np.all(np.isfinite(mat))
+
+
+def test_voice_feature_extractor_spectral_methods():
+    """Verify VoiceFeatureExtractor exposes spectral extraction methods."""
+    extractor = VoiceFeatureExtractor()
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 400 * t) * 0.5).astype(np.float32)
+
+    # Vector extraction
+    vec = extractor.extract_spectral(audio, sample_rate=sr)
+    assert vec.shape == (8,)
+    assert vec.dtype == np.float32
+
+    # Dict extraction
+    fdict = extractor.extract_spectral_dict(audio, sample_rate=sr)
+    assert len(fdict) == 8
+    assert fdict["zcr_mean"] == fdict["zero_crossing_rate_mean"]
+
+    # Frame extraction
+    frames = extractor.compute_spectral_frames(audio, sample_rate=sr)
+    assert len(frames) == 4
+
+    # Names
+    names = extractor.get_spectral_feature_names()
+    assert len(names) == 8
+    assert names == list(SPECTRAL_FEATURE_NAMES)
+
+
+def test_mfcc_pitch_energy_behavior_unmodified():
+    """Verify MFCC, pitch, and energy extraction continue to operate unmodified."""
+    sr = 16_000
+    t = np.linspace(0, 2.0, sr * 2, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.8).astype(np.float32)
+
+    mfcc_feats = extract_mfcc_features(audio, sample_rate=sr)
+    assert mfcc_feats.shape == (26,)
+
+    pitch_feats = extract_pitch_features(audio, sample_rate=sr)
+    assert pitch_feats.shape == (4,)
+
+    energy_feats = extract_energy_features(audio, sample_rate=sr)
+    assert energy_feats.shape == (3,)
+
 
 
 
