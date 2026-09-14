@@ -1,5 +1,5 @@
 """
-Voice Modality — Acoustic Feature Extraction: MFCC, Pitch, Energy & Spectral Extraction
+Voice Modality — Acoustic Feature Extraction: Combined Audio Feature Extractor
 
 Extracts acoustic feature representations from preprocessed 16 kHz mono
 audio signals for stress and risk classification models.
@@ -14,6 +14,9 @@ Features Implemented:
       using mean, standard deviation, and variation/range (fixed-length 3D).
     - Spectral Descriptors: Spectral centroid, spectral bandwidth, spectral rolloff,
       and zero-crossing rate aggregated using mean and standard deviation (fixed-length 8D).
+    - Combined Feature Extractor: Unified extraction combining MFCC + Pitch + Energy
+      + Spectral features into a single fixed-length 1D float32 vector (41D default)
+      with deterministic ordering and interpretable dictionary output.
     - Robust unvoiced/silent audio handling without NaN or Inf values.
     - Reusable controller (VoiceFeatureExtractor) and functional APIs.
 
@@ -200,6 +203,95 @@ class SpectralFeatureDict(dict):
             return self[key]
         except KeyError:
             return default
+
+
+def get_combined_feature_names(
+    n_mfcc: int = FEATURE_CONFIG.n_mfcc,
+    stats: Tuple[str, ...] = FEATURE_CONFIG.aggregation_stats,
+) -> List[str]:
+    """
+    Generate complete list of ordered feature names for combined audio feature vectors.
+
+    Default total: 41 features
+        - MFCC (26): mfcc_1_mean .. mfcc_13_mean, mfcc_1_std .. mfcc_13_std
+        - Pitch (4): pitch_mean, pitch_std, pitch_min, pitch_max
+        - Energy (3): energy_mean, energy_std, energy_range
+        - Spectral (8): centroid (mean, std), bandwidth (mean, std),
+                        rolloff (mean, std), zero-crossing rate (mean, std)
+
+    Parameters:
+        n_mfcc: Number of MFCC coefficients (default: 13).
+        stats: Aggregation statistics (default: ('mean', 'std')).
+
+    Returns:
+        List of 41 feature name strings in deterministic order.
+    """
+    names: List[str] = []
+    names.extend(get_mfcc_feature_names(n_mfcc=n_mfcc, stats=stats))
+    names.extend(get_pitch_feature_names())
+    names.extend(get_energy_feature_names())
+    names.extend(get_spectral_feature_names())
+    return names
+
+
+COMBINED_FEATURE_NAMES: Tuple[str, ...] = tuple(get_combined_feature_names())
+AUDIO_FEATURE_NAMES: Tuple[str, ...] = COMBINED_FEATURE_NAMES
+get_audio_feature_names = get_combined_feature_names
+
+
+class CombinedFeatureDict(dict):
+    """
+    Dictionary container for combined voice features (41 features default).
+
+    Provides full standard dictionary semantics while offering convenient
+    sub-dictionary property accessors (mfcc, pitch, energy, spectral)
+    and an ordered vector conversion method (`to_vector`).
+    """
+
+    @property
+    def mfcc(self) -> Dict[str, float]:
+        """Subset dictionary containing only MFCC features."""
+        return {k: v for k, v in self.items() if k.startswith("mfcc_")}
+
+    @property
+    def pitch(self) -> Dict[str, float]:
+        """Subset dictionary containing only pitch features."""
+        return {k: v for k, v in self.items() if k.startswith("pitch_")}
+
+    @property
+    def energy(self) -> Dict[str, float]:
+        """Subset dictionary containing only energy features."""
+        return {k: v for k, v in self.items() if k.startswith("energy_")}
+
+    @property
+    def spectral(self) -> Dict[str, float]:
+        """Subset dictionary containing only spectral features."""
+        return {
+            k: v
+            for k, v in self.items()
+            if k.startswith("spectral_") or k.startswith("zero_crossing_rate_")
+        }
+
+    def to_vector(self, feature_names: Optional[List[str]] = None) -> np.ndarray:
+        """
+        Convert dictionary values to an ordered 1D float32 numpy array.
+
+        Parameters:
+            feature_names: Optional explicit list of feature keys defining order.
+                           Defaults to standard get_combined_feature_names().
+
+        Returns:
+            1D numpy array of shape (N,) with float32 dtype.
+        """
+        names = feature_names if feature_names is not None else get_combined_feature_names()
+        return np.array([self[name] for name in names], dtype=np.float32)
+
+    def to_numpy(self, feature_names: Optional[List[str]] = None) -> np.ndarray:
+        """Alias for to_vector()."""
+        return self.to_vector(feature_names=feature_names)
+
+
+AudioFeatureDict = CombinedFeatureDict
 
 
 # ===========================================================================
@@ -1004,6 +1096,164 @@ def extract_spectral_dict(
 
 
 # ===========================================================================
+# Combined Audio Feature Extraction
+# ===========================================================================
+
+def extract_combined_features(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    n_mfcc: Optional[int] = None,
+    pitch_fmin: Optional[float] = None,
+    pitch_fmax: Optional[float] = None,
+    energy_frame_length: Optional[int] = None,
+    energy_hop_length: Optional[int] = None,
+    spectral_n_fft: Optional[int] = None,
+    spectral_hop_length: Optional[int] = None,
+    spectral_roll_percent: float = 0.85,
+) -> np.ndarray:
+    """
+    Extract a unified acoustic feature vector combining all voice descriptors.
+
+    Integrates:
+        1. MFCC Features: 26D default (13 coefficients x mean & std)
+        2. Pitch Features: 4D (mean, std, min, max)
+        3. Energy Features: 3D (mean, std, range)
+        4. Spectral Features: 8D (centroid, bandwidth, rolloff, zcr x mean & std)
+
+    Total: 41 fixed-length float32 features by default in strict deterministic order.
+
+    Reuses the four individual extraction functions:
+        - extract_mfcc_features
+        - extract_pitch_features
+        - extract_energy_features
+        - extract_spectral_features
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio, or AudioRecording.
+        sample_rate: Audio sampling frequency in Hz (defaults to container rate or 16,000 Hz).
+        config: Centralized FeatureConfig settings.
+        n_mfcc: Number of MFCC coefficients (default: config.n_mfcc = 13).
+        pitch_fmin: Minimum pitch search frequency in Hz (default: config.pitch_fmin = 50.0).
+        pitch_fmax: Maximum pitch search frequency in Hz (default: config.pitch_fmax = 500.0).
+        energy_frame_length: Analysis window size for energy contour.
+        energy_hop_length: Hop length for energy contour.
+        spectral_n_fft: FFT window size for spectral descriptors.
+        spectral_hop_length: Hop length for spectral descriptors.
+        spectral_roll_percent: Roll-off percentage for spectral rolloff (default: 0.85).
+
+    Returns:
+        1D numpy array of shape (41,) with float32 dtype.
+
+    Raises:
+        AudioDataError: If audio is empty, non-finite, or not 1D mono.
+        AudioSampleRateError: If sample rate <= 0.
+        ValueError: If extraction parameters are invalid.
+        TypeError: If audio is not a supported input type.
+    """
+    # Extract each component by reusing the existing extraction functions
+    mfcc_features = extract_mfcc_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        n_mfcc=n_mfcc,
+    )
+
+    pitch_features = extract_pitch_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        fmin=pitch_fmin,
+        fmax=pitch_fmax,
+    )
+
+    energy_features = extract_energy_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        frame_length=energy_frame_length,
+        hop_length=energy_hop_length,
+    )
+
+    spectral_features = extract_spectral_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        n_fft=spectral_n_fft,
+        hop_length=spectral_hop_length,
+        roll_percent=spectral_roll_percent,
+    )
+
+    combined = np.concatenate([
+        mfcc_features,
+        pitch_features,
+        energy_features,
+        spectral_features,
+    ]).astype(np.float32)
+
+    return np.nan_to_num(combined, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
+
+# Aliases for flexible API discovery
+extract_combined = extract_combined_features
+extract_audio_features = extract_combined_features
+extract_voice_features = extract_combined_features
+
+
+def extract_combined_dict(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    n_mfcc: Optional[int] = None,
+    pitch_fmin: Optional[float] = None,
+    pitch_fmax: Optional[float] = None,
+    energy_frame_length: Optional[int] = None,
+    energy_hop_length: Optional[int] = None,
+    spectral_n_fft: Optional[int] = None,
+    spectral_hop_length: Optional[int] = None,
+    spectral_roll_percent: float = 0.85,
+) -> CombinedFeatureDict:
+    """
+    Extract combined acoustic features and return them as an interpretable CombinedFeatureDict.
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio, or AudioRecording.
+        sample_rate: Audio sampling frequency in Hz.
+        config: FeatureConfig settings.
+
+    Returns:
+        CombinedFeatureDict mapping 41 feature names to float values.
+    """
+    feature_vec = extract_combined_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        n_mfcc=n_mfcc,
+        pitch_fmin=pitch_fmin,
+        pitch_fmax=pitch_fmax,
+        energy_frame_length=energy_frame_length,
+        energy_hop_length=energy_hop_length,
+        spectral_n_fft=spectral_n_fft,
+        spectral_hop_length=spectral_hop_length,
+        spectral_roll_percent=spectral_roll_percent,
+    )
+
+    num_mfcc = n_mfcc if n_mfcc is not None else config.n_mfcc
+    names = get_combined_feature_names(
+        n_mfcc=num_mfcc,
+        stats=config.aggregation_stats,
+    )
+
+    return CombinedFeatureDict(zip(names, [float(x) for x in feature_vec]))
+
+
+# Aliases for dictionary extraction
+extract_audio_feature_dict = extract_combined_dict
+extract_voice_dict = extract_combined_dict
+extract_combined_feature_dict = extract_combined_dict
+
+
+# ===========================================================================
 # Reusable Feature Extractor Controller
 # ===========================================================================
 
@@ -1242,3 +1492,70 @@ class VoiceFeatureExtractor:
             hop_length=hop_length,
             roll_percent=roll_percent,
         )
+
+    # --- Combined Feature Methods ---
+
+    def get_combined_feature_names(self, n_mfcc: Optional[int] = None) -> List[str]:
+        """Get complete list of ordered feature names for combined audio features."""
+        num = n_mfcc if n_mfcc is not None else self.config.n_mfcc
+        return get_combined_feature_names(n_mfcc=num, stats=self.config.aggregation_stats)
+
+    def extract_combined(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        n_mfcc: Optional[int] = None,
+        pitch_fmin: Optional[float] = None,
+        pitch_fmax: Optional[float] = None,
+        energy_frame_length: Optional[int] = None,
+        energy_hop_length: Optional[int] = None,
+        spectral_n_fft: Optional[int] = None,
+        spectral_hop_length: Optional[int] = None,
+        spectral_roll_percent: float = 0.85,
+    ) -> np.ndarray:
+        """Extract complete unified acoustic feature vector (41D default)."""
+        return extract_combined_features(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            n_mfcc=n_mfcc,
+            pitch_fmin=pitch_fmin,
+            pitch_fmax=pitch_fmax,
+            energy_frame_length=energy_frame_length,
+            energy_hop_length=energy_hop_length,
+            spectral_n_fft=spectral_n_fft,
+            spectral_hop_length=spectral_hop_length,
+            spectral_roll_percent=spectral_roll_percent,
+        )
+
+    def extract_combined_dict(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        n_mfcc: Optional[int] = None,
+        pitch_fmin: Optional[float] = None,
+        pitch_fmax: Optional[float] = None,
+        energy_frame_length: Optional[int] = None,
+        energy_hop_length: Optional[int] = None,
+        spectral_n_fft: Optional[int] = None,
+        spectral_hop_length: Optional[int] = None,
+        spectral_roll_percent: float = 0.85,
+    ) -> CombinedFeatureDict:
+        """Extract complete unified acoustic features as a CombinedFeatureDict."""
+        return extract_combined_dict(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            n_mfcc=n_mfcc,
+            pitch_fmin=pitch_fmin,
+            pitch_fmax=pitch_fmax,
+            energy_frame_length=energy_frame_length,
+            energy_hop_length=energy_hop_length,
+            spectral_n_fft=spectral_n_fft,
+            spectral_hop_length=spectral_hop_length,
+            spectral_roll_percent=spectral_roll_percent,
+        )
+
+    # Aliases
+    extract_all = extract_combined
+    extract_all_dict = extract_combined_dict

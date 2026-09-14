@@ -57,9 +57,13 @@ from src.ai_model.voice.preprocessing import (
     trim_silence,
 )
 from src.ai_model.voice.features import (
+    AUDIO_FEATURE_NAMES,
+    COMBINED_FEATURE_NAMES,
     ENERGY_FEATURE_NAMES,
     PITCH_FEATURE_NAMES,
     SPECTRAL_FEATURE_NAMES,
+    AudioFeatureDict,
+    CombinedFeatureDict,
     EnergyFeatureDict,
     FeatureExtractionError,
     SpectralFeatureDict,
@@ -68,6 +72,11 @@ from src.ai_model.voice.features import (
     compute_mfcc_frames,
     compute_pitch_frames,
     compute_spectral_frames,
+    extract_audio_feature_dict,
+    extract_audio_features,
+    extract_combined,
+    extract_combined_dict,
+    extract_combined_features,
     extract_energy,
     extract_energy_dict,
     extract_energy_features,
@@ -80,6 +89,10 @@ from src.ai_model.voice.features import (
     extract_spectral,
     extract_spectral_dict,
     extract_spectral_features,
+    extract_voice_dict,
+    extract_voice_features,
+    get_audio_feature_names,
+    get_combined_feature_names,
     get_energy_feature_names,
     get_mfcc_feature_names,
     get_pitch_feature_names,
@@ -1820,6 +1833,209 @@ def test_mfcc_pitch_energy_behavior_unmodified():
 
     energy_feats = extract_energy_features(audio, sample_rate=sr)
     assert energy_feats.shape == (3,)
+
+
+# ===========================================================================
+# Combined Audio Feature Extraction Tests (Commit 12)
+# ===========================================================================
+
+def test_extract_combined_features_shape_and_dtype():
+    """Verify extract_combined_features returns a 41-dim float32 vector."""
+    sr = 16_000
+    t = np.linspace(0, 2.0, sr * 2, endpoint=False)
+    audio = (0.5 * np.sin(2 * np.pi * 330 * t) + 0.3 * np.sin(2 * np.pi * 660 * t)).astype(np.float32)
+
+    features = extract_combined_features(audio, sample_rate=sr)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (41,)
+    assert features.dtype == np.float32
+    assert np.all(np.isfinite(features))
+
+
+def test_combined_feature_names_and_ordering():
+    """Verify combined feature names count (41) and strict deterministic ordering."""
+    names = get_combined_feature_names()
+    assert len(names) == 41
+    assert len(COMBINED_FEATURE_NAMES) == 41
+    assert len(AUDIO_FEATURE_NAMES) == 41
+    assert names == list(COMBINED_FEATURE_NAMES)
+    assert get_audio_feature_names() == names
+
+    # Sub-component block checks
+    mfcc_names = get_mfcc_feature_names()
+    pitch_names = get_pitch_feature_names()
+    energy_names = get_energy_feature_names()
+    spectral_names = get_spectral_feature_names()
+
+    assert names[:26] == mfcc_names
+    assert names[26:30] == pitch_names
+    assert names[30:33] == energy_names
+    assert names[33:41] == spectral_names
+
+
+def test_combined_component_consistency():
+    """Verify combined feature extractor exactly matches individual extractors."""
+    sr = 16_000
+    t = np.linspace(0, 2.0, sr * 2, endpoint=False)
+    audio = (0.6 * np.sin(2 * np.pi * 440 * t) + 0.2 * np.sin(2 * np.pi * 880 * t)).astype(np.float32)
+
+    combined = extract_combined_features(audio, sample_rate=sr)
+    mfcc = extract_mfcc_features(audio, sample_rate=sr)
+    pitch = extract_pitch_features(audio, sample_rate=sr)
+    energy = extract_energy_features(audio, sample_rate=sr)
+    spectral = extract_spectral_features(audio, sample_rate=sr)
+
+    assert np.allclose(combined[:26], mfcc, rtol=1e-5, atol=1e-5)
+    assert np.allclose(combined[26:30], pitch, rtol=1e-5, atol=1e-5)
+    assert np.allclose(combined[30:33], energy, rtol=1e-5, atol=1e-5)
+    assert np.allclose(combined[33:41], spectral, rtol=1e-5, atol=1e-5)
+
+
+def test_combined_features_determinism():
+    """Verify combined feature extraction is deterministic across multiple calls."""
+    sr = 16_000
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    audio = (np.sin(2 * np.pi * 500 * t) * 0.7).astype(np.float32)
+
+    vec1 = extract_combined_features(audio, sample_rate=sr)
+    vec2 = extract_combined_features(audio, sample_rate=sr)
+
+    assert np.array_equal(vec1, vec2)
+
+
+def test_extract_combined_features_silent_audio():
+    """Verify extract_combined_features safely processes silent audio without NaN/Inf."""
+    sr = 16_000
+    silent_audio = np.zeros(sr * 2, dtype=np.float32)
+
+    features = extract_combined_features(silent_audio, sample_rate=sr)
+
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (41,)
+    assert features.dtype == np.float32
+    assert not np.any(np.isnan(features))
+    assert not np.any(np.isinf(features))
+
+    # Pitch, energy, and spectral components should be 0.0 for silent audio
+    assert np.all(features[26:30] == 0.0)  # pitch
+    assert np.all(features[30:33] == 0.0)  # energy
+    assert np.all(features[33:41] == 0.0)  # spectral
+    # MFCC should be finite
+    assert np.all(np.isfinite(features[:26]))
+
+
+def test_extract_combined_features_invalid_inputs():
+    """Verify input validation handles empty, non-finite, multidimensional, and bad params."""
+    # Empty audio
+    with pytest.raises(AudioDataError, match="empty"):
+        extract_combined_features(np.array([], dtype=np.float32))
+
+    # NaN / Inf audio
+    with pytest.raises(AudioDataError, match="NaN or Inf"):
+        extract_combined_features(np.array([0.1, np.nan, 0.3], dtype=np.float32))
+
+    with pytest.raises(AudioDataError, match="NaN or Inf"):
+        extract_combined_features(np.array([0.1, np.inf, 0.3], dtype=np.float32))
+
+    # Multidimensional audio
+    with pytest.raises(AudioDataError, match="1D mono"):
+        extract_combined_features(np.zeros((16000, 2), dtype=np.float32))
+
+    # Invalid sample rate
+    with pytest.raises(AudioSampleRateError, match="positive"):
+        extract_combined_features(np.ones(1000, dtype=np.float32), sample_rate=0)
+
+    # Unsupported type
+    with pytest.raises(TypeError, match="Unsupported audio input type"):
+        extract_combined_features("not_audio")  # type: ignore
+
+
+def test_extract_combined_features_containers(synthetic_wav_file: Path):
+    """Verify combined extraction accepts PreprocessedAudio and AudioRecording containers."""
+    # PreprocessedAudio
+    preprocessed = preprocess_audio(synthetic_wav_file)
+    feats_prep = extract_combined_features(preprocessed)
+    assert feats_prep.shape == (41,)
+    assert feats_prep.dtype == np.float32
+    assert np.all(np.isfinite(feats_prep))
+
+    # AudioRecording
+    rec = AudioRecording(
+        audio_data=preprocessed.audio_data,
+        sample_rate=preprocessed.sample_rate,
+        channels=1,
+        duration_seconds=preprocessed.duration_seconds,
+    )
+    feats_rec = extract_combined_features(rec)
+    assert feats_rec.shape == (41,)
+    assert feats_rec.dtype == np.float32
+    assert np.all(np.isfinite(feats_rec))
+
+
+def test_extract_combined_dict_and_container():
+    """Verify extract_combined_dict produces 41-element CombinedFeatureDict with properties."""
+    sr = 16_000
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.7).astype(np.float32)
+
+    feat_dict = extract_combined_dict(audio, sample_rate=sr)
+
+    assert isinstance(feat_dict, CombinedFeatureDict)
+    assert len(feat_dict) == 41
+
+    # Check all names are present and finite
+    for name in COMBINED_FEATURE_NAMES:
+        assert name in feat_dict
+        assert isinstance(feat_dict[name], float)
+        assert np.isfinite(feat_dict[name])
+
+    # Check sub-dictionary accessors
+    assert len(feat_dict.mfcc) == 26
+    assert len(feat_dict.pitch) == 4
+    assert len(feat_dict.energy) == 3
+    assert len(feat_dict.spectral) == 8
+
+    # Check to_vector
+    vec = feat_dict.to_vector()
+    assert vec.shape == (41,)
+    assert vec.dtype == np.float32
+    assert np.allclose(vec, extract_combined_features(audio, sample_rate=sr))
+
+    # Check to_numpy alias
+    assert np.array_equal(vec, feat_dict.to_numpy())
+
+
+def test_voice_feature_extractor_combined_methods():
+    """Verify VoiceFeatureExtractor exposes combined extraction methods and aliases."""
+    extractor = VoiceFeatureExtractor()
+    sr = 16_000
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    audio = (np.sin(2 * np.pi * 400 * t) * 0.6).astype(np.float32)
+
+    # Names
+    names = extractor.get_combined_feature_names()
+    assert len(names) == 41
+    assert names == list(COMBINED_FEATURE_NAMES)
+
+    # Vector extraction
+    vec = extractor.extract_combined(audio, sample_rate=sr)
+    assert vec.shape == (41,)
+    assert vec.dtype == np.float32
+
+    # Alias extraction
+    vec_all = extractor.extract_all(audio, sample_rate=sr)
+    assert np.array_equal(vec, vec_all)
+
+    # Dict extraction
+    fdict = extractor.extract_combined_dict(audio, sample_rate=sr)
+    assert len(fdict) == 41
+    assert isinstance(fdict, CombinedFeatureDict)
+
+    # Alias dict extraction
+    fdict_all = extractor.extract_all_dict(audio, sample_rate=sr)
+    assert fdict == fdict_all
+
 
 
 
