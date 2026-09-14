@@ -125,6 +125,17 @@ from src.ai_model.voice.model import (
     VoiceRandomForestClassifier,
     separate_features_and_target,
 )
+from src.ai_model.voice.evaluation import (
+    EvaluationError,
+    EvaluationInputError,
+    EvaluationMetrics,
+    VoiceEvaluationMetrics,
+    VoiceModelMetrics,
+    calculate_classification_metrics,
+    calculate_voice_metrics,
+    compute_voice_metrics,
+    evaluate_voice_model,
+)
 
 
 
@@ -2928,6 +2939,205 @@ def test_random_forest_aliases_and_inheritance():
     assert VoiceRandomForestClassifier is VoiceRandomForest
     assert issubclass(VoiceRandomForest, BaseVoiceClassifier)
     assert issubclass(VoiceLogisticRegression, BaseVoiceClassifier)
+
+
+# ===========================================================================
+# Model Evaluation Metrics Tests (Commit 16)
+# ===========================================================================
+
+def test_calculate_voice_metrics_binary_arbitrary_labels():
+    """Verify calculate_voice_metrics on binary string labels."""
+    y_true = ["low_risk", "high_risk", "low_risk", "high_risk", "high_risk", "low_risk"]
+    y_pred = ["low_risk", "high_risk", "high_risk", "high_risk", "high_risk", "low_risk"]
+
+    metrics = calculate_voice_metrics(y_true, y_pred)
+
+    assert isinstance(metrics, VoiceModelMetrics)
+    assert np.isclose(metrics.accuracy, 5 / 6)
+    assert 0.0 <= metrics.precision <= 1.0
+    assert 0.0 <= metrics.recall <= 1.0
+    assert 0.0 <= metrics.f1 <= 1.0
+    assert 0.0 <= metrics.macro_f1 <= 1.0
+    assert metrics.support == 6
+    assert set(metrics.classes) == {"low_risk", "high_risk"}
+
+    # Per-class metrics
+    assert "low_risk" in metrics.per_class
+    assert "high_risk" in metrics.per_class
+    assert metrics.per_class["low_risk"]["support"] == 3
+    assert metrics.per_class["high_risk"]["support"] == 3
+
+    # Dictionary access and conversion
+    metrics_dict = metrics.to_dict()
+    assert isinstance(metrics_dict, dict)
+    assert "accuracy" in metrics_dict
+    assert "macro_f1" in metrics_dict
+    assert "per_class" in metrics_dict
+    assert metrics["accuracy"] == metrics.accuracy
+    assert metrics["macro_f1"] == metrics.macro_f1
+    assert "accuracy" in metrics
+    assert metrics.get("support") == 6
+    assert "accuracy=" in repr(metrics)
+
+
+def test_calculate_voice_metrics_multiclass_arbitrary_labels():
+    """Verify calculate_voice_metrics on multiclass arbitrary string targets."""
+    y_true = ["healthy", "healthy", "mild", "mild", "severe", "severe"]
+    y_pred = ["healthy", "mild", "mild", "mild", "severe", "healthy"]
+
+    metrics = calculate_voice_metrics(y_true, y_pred)
+
+    assert np.isclose(metrics.accuracy, 4 / 6)
+    assert len(metrics.classes) == 3
+    assert set(metrics.classes) == {"healthy", "mild", "severe"}
+
+    # Macro F1 should equal the unweighted average of per-class F1
+    per_class_f1s = [metrics.per_class[c]["f1"] for c in metrics.classes]
+    assert np.isclose(metrics.macro_f1, np.mean(per_class_f1s))
+
+    # Test with macro averaging strategy
+    macro_metrics = calculate_voice_metrics(y_true, y_pred, average="macro")
+    assert np.isclose(macro_metrics.f1, metrics.macro_f1)
+    assert np.isclose(macro_metrics.precision, metrics.macro_precision)
+    assert np.isclose(macro_metrics.recall, metrics.macro_recall)
+
+
+def test_calculate_voice_metrics_numeric_labels():
+    """Verify calculate_voice_metrics on numeric / integer targets."""
+    y_true = np.array([0, 1, 2, 0, 1, 2])
+    y_pred = np.array([0, 1, 1, 0, 1, 2])
+
+    metrics = calculate_voice_metrics(y_true, y_pred)
+    assert np.isclose(metrics.accuracy, 5 / 6)
+    assert set(metrics.classes) == {0, 1, 2}
+    assert metrics.support == 6
+
+
+def test_calculate_voice_metrics_zero_division_safety():
+    """Verify zero-division produces 0.0 scores safely without throwing exceptions or warnings."""
+    # class_b is in y_true but never predicted
+    y_true = ["class_a", "class_a", "class_b", "class_b"]
+    y_pred = ["class_a", "class_a", "class_a", "class_a"]
+
+    metrics = calculate_voice_metrics(y_true, y_pred)
+
+    assert metrics.per_class["class_b"]["precision"] == 0.0
+    assert metrics.per_class["class_b"]["recall"] == 0.0
+    assert metrics.per_class["class_b"]["f1"] == 0.0
+    assert np.isclose(metrics.accuracy, 0.5)
+    assert metrics.macro_f1 < 1.0
+
+
+def test_calculate_voice_metrics_input_validation():
+    """Verify rigorous validation of ground truth and prediction inputs."""
+    # None inputs
+    with pytest.raises(EvaluationInputError, match="cannot be None"):
+        calculate_voice_metrics(None, ["a", "b"])
+
+    with pytest.raises(EvaluationInputError, match="cannot be None"):
+        calculate_voice_metrics(["a", "b"], None)
+
+    # Empty inputs
+    with pytest.raises(EvaluationInputError, match="empty"):
+        calculate_voice_metrics([], [])
+
+    # Sample count mismatch
+    with pytest.raises(EvaluationInputError, match="mismatch"):
+        calculate_voice_metrics(["a", "b", "c"], ["a", "b"])
+
+    # Null values in y_true
+    with pytest.raises(EvaluationInputError, match="null/NaN"):
+        calculate_voice_metrics(pd.Series(["a", None, "b"]), pd.Series(["a", "a", "b"]))
+
+    # Null values in y_pred
+    with pytest.raises(EvaluationInputError, match="null/NaN"):
+        calculate_voice_metrics(pd.Series(["a", "b"]), pd.Series([np.nan, "b"]))
+
+
+def test_evaluate_voice_model_with_logistic_regression():
+    """Verify evaluate_voice_model works with VoiceLogisticRegression."""
+    df_train = _create_synthetic_feature_df(n_samples=20, random_seed=42)
+    df_test = _create_synthetic_feature_df(n_samples=10, random_seed=99)
+
+    model = VoiceLogisticRegression(random_state=42)
+    model.fit(df_train)
+
+    # Evaluate on combined DataFrame
+    metrics = evaluate_voice_model(model, df_test)
+    assert isinstance(metrics, VoiceModelMetrics)
+    assert 0.0 <= metrics.accuracy <= 1.0
+    assert 0.0 <= metrics.macro_f1 <= 1.0
+    assert metrics.support == 10
+
+    # Evaluate on separated features and target
+    X_test, y_test = separate_features_and_target(df_test)
+    metrics_sep = evaluate_voice_model(model, X=X_test, y=y_test)
+    assert metrics_sep.accuracy == metrics.accuracy
+    assert metrics_sep.macro_f1 == metrics.macro_f1
+
+
+def test_evaluate_voice_model_with_random_forest():
+    """Verify evaluate_voice_model works with VoiceRandomForest."""
+    df_train = _create_synthetic_feature_df(n_samples=24, random_seed=42)
+    df_test = _create_synthetic_feature_df(n_samples=12, random_seed=88)
+
+    model = VoiceRandomForest(n_estimators=20, random_state=42)
+    model.fit(df_train)
+
+    # Evaluate on combined DataFrame
+    metrics = evaluate_voice_model(model, df_test)
+    assert isinstance(metrics, VoiceModelMetrics)
+    assert 0.0 <= metrics.accuracy <= 1.0
+    assert 0.0 <= metrics.macro_f1 <= 1.0
+    assert metrics.support == 12
+
+    # Evaluate on separated features and target
+    X_test, y_test = separate_features_and_target(df_test)
+    metrics_sep = evaluate_voice_model(model, X=X_test, y=y_test)
+    assert metrics_sep.accuracy == metrics.accuracy
+    assert metrics_sep.macro_f1 == metrics.macro_f1
+
+
+def test_evaluate_voice_model_error_handling():
+    """Verify evaluate_voice_model error handling for unfitted or invalid models."""
+    # None model
+    with pytest.raises(EvaluationError, match="cannot be None"):
+        evaluate_voice_model(None, pd.DataFrame({"feat_1": [1.0]}))
+
+    # Model missing predict method
+    class DummyNoPredict:
+        pass
+
+    with pytest.raises(EvaluationError, match="does not implement 'predict'"):
+        evaluate_voice_model(DummyNoPredict(), pd.DataFrame({"feat_1": [1.0]}), y=np.array([1]))
+
+    # Unfitted VoiceLogisticRegression
+    unfitted_lr = VoiceLogisticRegression()
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        evaluate_voice_model(unfitted_lr, pd.DataFrame({"feat_1": [1.0]}), y=np.array([1]))
+
+    # Unfitted VoiceRandomForest
+    unfitted_rf = VoiceRandomForest()
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        evaluate_voice_model(unfitted_rf, pd.DataFrame({"feat_1": [1.0]}), y=np.array([1]))
+
+    # Non-DataFrame without y
+    dummy_fitted = VoiceLogisticRegression()
+    df_train = _create_synthetic_feature_df(n_samples=10, random_seed=42)
+    dummy_fitted.fit(df_train)
+    with pytest.raises(EvaluationInputError, match="Target labels 'y' must be provided"):
+        evaluate_voice_model(dummy_fitted, np.ones((5, 41)), y=None)
+
+
+def test_voice_evaluation_aliases_and_exports():
+    """Verify evaluation aliases and exports."""
+    assert VoiceEvaluationMetrics is VoiceModelMetrics
+    assert EvaluationMetrics is VoiceModelMetrics
+    assert compute_voice_metrics is calculate_voice_metrics
+    assert calculate_classification_metrics is calculate_voice_metrics
+    assert issubclass(EvaluationError, ModelError)
+    assert issubclass(EvaluationInputError, EvaluationError)
+
 
 
 

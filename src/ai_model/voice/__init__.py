@@ -132,6 +132,18 @@ from .model import (
     VoiceRandomForestClassifier,
     separate_features_and_target,
 )
+from .evaluation import (
+    EvaluationError,
+    EvaluationInputError,
+    EvaluationMetrics,
+    VoiceEvaluationMetrics,
+    VoiceModelMetrics,
+    calculate_classification_metrics,
+    calculate_voice_metrics,
+    compute_voice_metrics,
+    evaluate_voice_model,
+)
+
 
 
 
