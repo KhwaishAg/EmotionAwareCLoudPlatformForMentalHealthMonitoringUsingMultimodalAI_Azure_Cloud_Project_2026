@@ -24,7 +24,9 @@ Specifications adhere to:
     - No hardcoded target labels or dataset names.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -58,6 +60,22 @@ class ModelNotFittedError(ModelError):
 class ModelInputError(ModelError):
     """Raised when input features, columns, or target labels are invalid."""
     pass
+
+
+class ModelSerializationError(ModelError):
+    """Raised when a voice model cannot be serialized or saved to disk."""
+    pass
+
+
+class ModelNotFoundError(ModelError):
+    """Raised when a specified model file does not exist on disk."""
+    pass
+
+
+class ModelCorruptError(ModelError):
+    """Raised when a model file is corrupted, empty, or fails integrity checks."""
+    pass
+
 
 
 # ===========================================================================
@@ -451,6 +469,40 @@ class BaseVoiceClassifier:
             results.append({cls: float(prob) for cls, prob in zip(classes, row)})
         return results
 
+    def save(
+        self,
+        filepath: Union[str, Path],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        """
+        Serialize and save this fitted voice classifier to disk using joblib.
+
+        Parameters:
+            filepath: Destination file path (e.g., 'model.joblib').
+            metadata: Optional additional metadata dictionary to store in the bundle.
+
+        Returns:
+            Path to the saved model file.
+        """
+        return save_voice_model(self, filepath=filepath, metadata=metadata)
+
+    @classmethod
+    def load(
+        cls: Type[T],
+        filepath: Union[str, Path],
+    ) -> T:
+        """
+        Load a serialized voice classifier from disk and ensure matching class type.
+
+        Parameters:
+            filepath: Path to the serialized model file.
+
+        Returns:
+            Fitted classifier instance of type cls.
+        """
+        model = load_voice_model(filepath=filepath, expected_type=cls)
+        return model  # type: ignore[return-value]
+
 
 # ===========================================================================
 # Voice Logistic Regression Classifier
@@ -611,3 +663,140 @@ class VoiceRandomForest(BaseVoiceClassifier):
 VoiceBaselineClassifier = VoiceLogisticRegression
 VoiceLogisticRegressionClassifier = VoiceLogisticRegression
 VoiceRandomForestClassifier = VoiceRandomForest
+
+
+# ===========================================================================
+# Model Serialization Utilities
+# ===========================================================================
+
+def save_voice_model(
+    model: BaseVoiceClassifier,
+    filepath: Union[str, Path],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """
+    Serialize and save a trained voice model to disk using joblib.
+
+    Parameters:
+        model: Fitted BaseVoiceClassifier instance (VoiceLogisticRegression, VoiceRandomForest).
+        filepath: Destination file path (e.g. 'models/voice_rf.joblib').
+        metadata: Optional additional metadata dictionary to store with the model.
+
+    Returns:
+        Path to the saved model file.
+
+    Raises:
+        ModelNotFittedError: If model is not in a fitted state.
+        ModelSerializationError: If saving fails due to filesystem or serialization errors.
+    """
+    if model is None:
+        raise ModelSerializationError("Cannot save None as a voice model.")
+
+    if not isinstance(model, BaseVoiceClassifier):
+        raise TypeError(
+            f"Expected an instance of BaseVoiceClassifier, got {type(model).__name__}."
+        )
+
+    if not model.is_fitted:
+        raise ModelNotFittedError(
+            f"Cannot save unfitted model '{model.__class__.__name__}'. "
+            "Call 'fit' with training data before saving."
+        )
+
+    path = Path(filepath)
+    if not path.name or path.is_dir():
+        raise ModelSerializationError(f"Invalid model destination path: '{filepath}'.")
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        bundle: Dict[str, Any] = {
+            "format_version": "1.0",
+            "model_type": model.__class__.__name__,
+            "model": model,
+            "feature_names": model.feature_names_,
+            "classes": model.classes_,
+            "n_features_in": model.n_features_in_,
+            "scale_features": model.scale_features,
+            "config": model.config,
+            "metadata": metadata or {},
+        }
+        joblib.dump(bundle, path)
+        return path
+    except Exception as e:
+        if isinstance(e, ModelError):
+            raise
+        raise ModelSerializationError(f"Failed to save voice model to '{filepath}': {e}") from e
+
+
+def load_voice_model(
+    filepath: Union[str, Path],
+    expected_type: Optional[Type[BaseVoiceClassifier]] = None,
+) -> BaseVoiceClassifier:
+    """
+    Load a serialized voice model from disk.
+
+    Validates that the file exists, is non-empty, deserializes properly,
+    and reconstructs a valid fitted voice classifier with intact feature names and classes.
+
+    Parameters:
+        filepath: Path to the serialized model file.
+        expected_type: Optional subclass type check (e.g. VoiceRandomForest).
+
+    Returns:
+        Loaded, ready-to-use BaseVoiceClassifier instance.
+
+    Raises:
+        ModelNotFoundError: If filepath does not exist on disk.
+        ModelCorruptError: If the file is corrupt, empty, or contains an invalid model.
+    """
+    path = Path(filepath)
+
+    if not path.exists():
+        raise ModelNotFoundError(f"Model file not found at: '{filepath}'.")
+
+    if path.is_dir():
+        raise ModelCorruptError(f"Specified path is a directory, not a file: '{filepath}'.")
+
+    if path.stat().st_size == 0:
+        raise ModelCorruptError(f"Model file is empty (0 bytes): '{filepath}'.")
+
+    try:
+        loaded = joblib.load(path)
+    except Exception as e:
+        raise ModelCorruptError(f"Failed to deserialize model file '{filepath}': {e}") from e
+
+    # Extract model from bundle or handle direct instance
+    if isinstance(loaded, dict) and "model" in loaded:
+        model = loaded["model"]
+    elif isinstance(loaded, BaseVoiceClassifier):
+        model = loaded
+    else:
+        raise ModelCorruptError(
+            f"Deserialized object from '{filepath}' is of invalid type '{type(loaded).__name__}'. "
+            "Expected a serialized voice model bundle or BaseVoiceClassifier instance."
+        )
+
+    if not isinstance(model, BaseVoiceClassifier):
+        raise ModelCorruptError(
+            f"Model inside bundle is of invalid type '{type(model).__name__}'."
+        )
+
+    # Verify fitted state and essential attributes
+    if not getattr(model, "is_fitted_", False) or getattr(model, "classes_", None) is None:
+        raise ModelCorruptError(
+            f"Loaded model '{model.__class__.__name__}' is not in a valid fitted state."
+        )
+
+    if getattr(model, "feature_names_", None) is None:
+        raise ModelCorruptError(
+            f"Loaded model '{model.__class__.__name__}' is missing feature names."
+        )
+
+    # Verify expected subclass type if requested
+    if expected_type is not None and not isinstance(model, expected_type):
+        raise ModelCorruptError(
+            f"Expected model of type '{expected_type.__name__}', but loaded '{type(model).__name__}'."
+        )
+
+    return model
+

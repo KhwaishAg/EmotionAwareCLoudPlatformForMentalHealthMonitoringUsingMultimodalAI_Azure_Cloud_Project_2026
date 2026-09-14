@@ -19,6 +19,7 @@ Note:
 import io
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
@@ -115,14 +116,19 @@ from src.ai_model.voice.dataset import (
 )
 from src.ai_model.voice.model import (
     BaseVoiceClassifier,
+    ModelCorruptError,
     ModelError,
     ModelInputError,
+    ModelNotFoundError,
     ModelNotFittedError,
+    ModelSerializationError,
     VoiceBaselineClassifier,
     VoiceLogisticRegression,
     VoiceLogisticRegressionClassifier,
     VoiceRandomForest,
     VoiceRandomForestClassifier,
+    load_voice_model,
+    save_voice_model,
     separate_features_and_target,
 )
 from src.ai_model.voice.evaluation import (
@@ -3375,6 +3381,172 @@ def test_voice_confusion_matrix_aliases_and_exports():
     assert calculate_voice_confusion_matrix is compute_voice_confusion_matrix
     assert compute_confusion_matrix is compute_voice_confusion_matrix
     assert evaluate_confusion_matrix is evaluate_voice_confusion_matrix
+
+
+# ===========================================================================
+# Model Serialization Tests (Commit 18)
+# ===========================================================================
+
+def test_save_and_load_voice_logistic_regression(tmp_path: Path):
+    """Verify saving and loading VoiceLogisticRegression preserves fitted state, weights, and predictions."""
+    df_train = _create_synthetic_feature_df(n_samples=24, target_classes=("low_risk", "high_risk"), random_seed=42)
+    df_test = _create_synthetic_feature_df(n_samples=10, target_classes=("low_risk", "high_risk"), random_seed=99)
+
+    model = VoiceLogisticRegression(random_state=42)
+    model.fit(df_train)
+
+    orig_preds = model.predict(df_test)
+    orig_proba = model.predict_proba(df_test)
+
+    # 1. Save model via instance method
+    model_path = tmp_path / "voice_lr.joblib"
+    saved_path = model.save(model_path, metadata={"author": "test_suite"})
+    assert saved_path == model_path
+    assert model_path.exists()
+    assert model_path.stat().st_size > 0
+
+    # 2. Load model via load_voice_model function
+    loaded_fn = load_voice_model(model_path)
+    assert isinstance(loaded_fn, VoiceLogisticRegression)
+    assert loaded_fn.is_fitted
+    assert loaded_fn.feature_names_ == model.feature_names_
+    assert np.array_equal(loaded_fn.classes_, model.classes_)
+    assert np.allclose(loaded_fn.coef_, model.coef_)
+    assert np.allclose(loaded_fn.intercept_, model.intercept_)
+
+    # Verify identical predictions
+    assert np.array_equal(loaded_fn.predict(df_test), orig_preds)
+    assert np.allclose(loaded_fn.predict_proba(df_test), orig_proba)
+
+    # 3. Load model via class method
+    loaded_cls = VoiceLogisticRegression.load(model_path)
+    assert isinstance(loaded_cls, VoiceLogisticRegression)
+    assert np.array_equal(loaded_cls.predict(df_test), orig_preds)
+
+
+def test_save_and_load_voice_random_forest(tmp_path: Path):
+    """Verify saving and loading VoiceRandomForest preserves multiclass state and importances."""
+    df_train = _create_synthetic_feature_df(
+        n_samples=30,
+        target_classes=("mild", "moderate", "severe"),
+        random_seed=42,
+    )
+    df_test = _create_synthetic_feature_df(
+        n_samples=15,
+        target_classes=("mild", "moderate", "severe"),
+        random_seed=123,
+    )
+
+    model = VoiceRandomForest(n_estimators=25, random_state=42)
+    model.fit(df_train)
+
+    orig_preds = model.predict(df_test)
+    orig_proba = model.predict_proba(df_test)
+    orig_importances = model.feature_importances_
+
+    # Save to a nested directory (tests parent directory auto-creation)
+    nested_path = tmp_path / "models" / "rf_subdir" / "voice_rf.joblib"
+    saved_path = save_voice_model(model, nested_path)
+    assert saved_path == nested_path
+    assert nested_path.exists()
+
+    # Load and verify
+    loaded_rf = VoiceRandomForest.load(nested_path)
+    assert isinstance(loaded_rf, VoiceRandomForest)
+    assert loaded_rf.is_fitted
+    assert loaded_rf.feature_names_ == model.feature_names_
+    assert list(loaded_rf.classes_) == list(model.classes_)
+    assert np.allclose(loaded_rf.feature_importances_, orig_importances)
+
+    # Verify identical outputs
+    assert np.array_equal(loaded_rf.predict(df_test), orig_preds)
+    assert np.allclose(loaded_rf.predict_proba(df_test), orig_proba)
+
+
+def test_save_unfitted_model_raises_error(tmp_path: Path):
+    """Verify saving an unfitted model raises ModelNotFittedError."""
+    unfitted_lr = VoiceLogisticRegression()
+    with pytest.raises(ModelNotFittedError, match="unfitted"):
+        unfitted_lr.save(tmp_path / "unfitted_lr.joblib")
+
+    unfitted_rf = VoiceRandomForest()
+    with pytest.raises(ModelNotFittedError, match="unfitted"):
+        save_voice_model(unfitted_rf, tmp_path / "unfitted_rf.joblib")
+
+
+def test_save_voice_model_invalid_inputs(tmp_path: Path):
+    """Verify validation of model and path arguments during save."""
+    # None model
+    with pytest.raises(ModelSerializationError, match="Cannot save None"):
+        save_voice_model(None, tmp_path / "model.joblib")
+
+    # Non-BaseVoiceClassifier object
+    with pytest.raises(TypeError, match="Expected an instance of BaseVoiceClassifier"):
+        save_voice_model("not_a_model", tmp_path / "model.joblib")
+
+    # Path is directory
+    df = _create_synthetic_feature_df(n_samples=10, random_seed=42)
+    fitted_model = VoiceLogisticRegression().fit(df)
+    with pytest.raises(ModelSerializationError, match="Invalid model destination path"):
+        save_voice_model(fitted_model, tmp_path)
+
+
+def test_load_voice_model_nonexistent_file(tmp_path: Path):
+    """Verify loading from non-existent path raises ModelNotFoundError."""
+    missing_path = tmp_path / "does_not_exist.joblib"
+    with pytest.raises(ModelNotFoundError, match="Model file not found"):
+        load_voice_model(missing_path)
+
+    with pytest.raises(ModelNotFoundError, match="Model file not found"):
+        VoiceRandomForest.load(missing_path)
+
+
+def test_load_voice_model_empty_file(tmp_path: Path):
+    """Verify loading a 0-byte file raises ModelCorruptError."""
+    empty_file = tmp_path / "empty_model.joblib"
+    empty_file.touch()
+
+    with pytest.raises(ModelCorruptError, match="empty \\(0 bytes\\)"):
+        load_voice_model(empty_file)
+
+
+def test_load_voice_model_corrupt_data(tmp_path: Path):
+    """Verify loading a corrupt file raises ModelCorruptError."""
+    corrupt_file = tmp_path / "corrupt.joblib"
+    corrupt_file.write_bytes(b"GARBAGE_NOT_A_VALID_PICKLE_1234567890")
+
+    with pytest.raises(ModelCorruptError, match="Failed to deserialize"):
+        load_voice_model(corrupt_file)
+
+
+def test_load_voice_model_invalid_object(tmp_path: Path):
+    """Verify loading a valid joblib file containing non-model data raises ModelCorruptError."""
+    invalid_file = tmp_path / "not_a_model.joblib"
+    joblib.dump({"some_random_key": 12345}, invalid_file)
+
+    with pytest.raises(ModelCorruptError, match="invalid type"):
+        load_voice_model(invalid_file)
+
+
+def test_load_voice_model_expected_type_mismatch(tmp_path: Path):
+    """Verify class method load enforces matching model type."""
+    df = _create_synthetic_feature_df(n_samples=12, random_seed=42)
+    rf_model = VoiceRandomForest(n_estimators=10, random_state=42).fit(df)
+
+    rf_path = tmp_path / "rf_model.joblib"
+    rf_model.save(rf_path)
+
+    # Attempting to load a Random Forest via VoiceLogisticRegression.load
+    with pytest.raises(ModelCorruptError, match="Expected model of type 'VoiceLogisticRegression'"):
+        VoiceLogisticRegression.load(rf_path)
+
+
+def test_voice_serialization_aliases_and_exports():
+    """Verify serialization exceptions and helpers inheritance."""
+    assert issubclass(ModelSerializationError, ModelError)
+    assert issubclass(ModelNotFoundError, ModelError)
+    assert issubclass(ModelCorruptError, ModelError)
+
 
 
 
