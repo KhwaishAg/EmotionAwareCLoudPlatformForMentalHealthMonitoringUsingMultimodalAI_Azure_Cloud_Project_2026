@@ -52,7 +52,7 @@ STANDARDIZED_RECORDING_PROMPT = (
 # ===========================================================================
 
 class AudioError(Exception):
-    """Base exception for all audio input and recording errors."""
+    """Base exception for all audio input, recording, and validation errors."""
     pass
 
 
@@ -68,6 +68,31 @@ class AudioFormatError(AudioError, ValueError):
 
 class AudioCorruptError(AudioError, ValueError):
     """Raised when an audio file or stream is empty, truncated, or unreadable."""
+    pass
+
+
+class AudioValidationError(AudioError, ValueError):
+    """Raised when an audio recording fails pipeline validation constraints."""
+    pass
+
+
+class AudioDurationError(AudioValidationError):
+    """Raised when audio duration falls outside acceptable pipeline limits (5-120s)."""
+    pass
+
+
+class AudioChannelError(AudioValidationError):
+    """Raised when audio channel count is invalid or unsupported."""
+    pass
+
+
+class AudioSampleRateError(AudioValidationError):
+    """Raised when audio sample rate is invalid or unsupported."""
+    pass
+
+
+class AudioDataError(AudioValidationError):
+    """Raised when audio waveform data is invalid (e.g. non-finite, NaN, Inf, empty)."""
     pass
 
 
@@ -95,6 +120,77 @@ def extract_participant_id(identifier_or_path: Union[str, Path]) -> Optional[str
     if match:
         return match.group(1).upper()
     return None
+
+
+# ===========================================================================
+# Audio Validation Result
+# ===========================================================================
+
+class ValidationResult(dict):
+    """
+    Structured outcome of validating an audio recording or file against pipeline constraints.
+
+    Subclasses dict to preserve backward compatibility with dictionary-style
+    key access (e.g., result['is_valid']), while offering attribute access
+    (e.g., result.is_valid) and error-raising helpers.
+    """
+
+    def __init__(
+        self,
+        is_valid: bool,
+        is_target_spec: bool,
+        meets_recommended_duration: bool,
+        is_target_sample_rate: bool,
+        is_mono: bool,
+        has_valid_data: bool,
+        is_silent: bool,
+        sample_rate: int,
+        channels: int,
+        duration_seconds: float,
+        num_samples: int,
+        errors: Optional[List[str]] = None,
+        warnings: Optional[List[str]] = None,
+        **kwargs: Any,
+    ):
+        errors = errors or []
+        warnings = warnings or []
+        data = {
+            "is_valid": is_valid,
+            "is_target_spec": is_target_spec,
+            "meets_recommended_duration": meets_recommended_duration,
+            "is_target_sample_rate": is_target_sample_rate,
+            "is_mono": is_mono,
+            "has_valid_data": has_valid_data,
+            "is_silent": is_silent,
+            "sample_rate": sample_rate,
+            "channels": channels,
+            "duration_seconds": round(duration_seconds, 3),
+            "num_samples": num_samples,
+            "errors": errors,
+            "warnings": warnings,
+            **kwargs,
+        }
+        super().__init__(data)
+        self.__dict__.update(data)
+
+    def raise_if_invalid(self) -> None:
+        """
+        Raise a typed AudioValidationError subclass if validation failed.
+        """
+        if not self["is_valid"]:
+            errors = self.get("errors", [])
+            msg = "; ".join(errors) if errors else "Audio validation failed."
+            for err in errors:
+                err_lower = err.lower()
+                if "duration" in err_lower:
+                    raise AudioDurationError(err)
+                if "channel" in err_lower:
+                    raise AudioChannelError(err)
+                if "sample rate" in err_lower:
+                    raise AudioSampleRateError(err)
+                if any(kw in err_lower for kw in ("nan", "inf", "sample", "data", "dimension", "shape", "empty")):
+                    raise AudioDataError(err)
+            raise AudioValidationError(msg)
 
 
 # ===========================================================================
@@ -138,88 +234,159 @@ class AudioRecording:
     def is_target_spec(self, config: AudioConfig = AUDIO_CONFIG) -> bool:
         """
         Check if recording satisfies the ideal target pipeline specifications:
-        mono, 16 kHz sample rate, and within recommended 30-60 second duration.
+        mono, 16 kHz sample rate, within recommended 30-60 second duration,
+        and valid finite waveform data.
         """
         return (
             self.channels == config.target_channels
             and self.sample_rate == config.target_sample_rate
             and config.recommended_min_duration <= self.duration_seconds <= config.recommended_max_duration
+            and self.num_samples > 0
+            and bool(np.all(np.isfinite(self.audio_data)))
         )
 
-    def validate(self, config: AudioConfig = AUDIO_CONFIG) -> Dict[str, Any]:
+    def validate(
+        self,
+        config: AudioConfig = AUDIO_CONFIG,
+        strict: bool = False,
+    ) -> ValidationResult:
         """
         Validate the recording against configured pipeline constraints.
 
+        Checks:
+            - Waveform data integrity (non-empty, finite values, no NaN/Inf)
+            - Channel count (valid positive count, mono target)
+            - Sample rate (valid positive rate, 16 kHz target)
+            - Duration limits (5-120s acceptable bounds, 30-60s recommended)
+            - Silence detection and amplitude range
+
+        Parameters:
+            config: Centralized AudioConfig settings.
+            strict: If True, raises a specific AudioValidationError if invalid.
+
         Returns:
-            Dictionary containing:
-                - is_valid: bool (within acceptable duration bounds and non-empty)
-                - is_target_spec: bool (matches target 16kHz mono 30-60s)
-                - meets_recommended_duration: bool (within 30-60s)
-                - is_target_sample_rate: bool (matches config target rate)
-                - is_mono: bool (channels == 1)
-                - sample_rate: int
-                - channels: int
-                - duration_seconds: float
-                - warnings: List of string warnings describing deviations.
+            ValidationResult with detailed flags, errors, and warnings.
         """
+        errors: List[str] = []
         warnings: List[str] = []
 
-        if self.num_samples == 0:
-            warnings.append("Audio contains zero samples.")
+        # 1. Waveform Data Integrity
+        has_valid_data = True
+        if self.num_samples == 0 or self.audio_data.size == 0:
+            errors.append("Audio contains zero samples.")
+            has_valid_data = False
+        elif not np.all(np.isfinite(self.audio_data)):
+            errors.append("Audio data contains non-finite values (NaN or Inf).")
+            has_valid_data = False
 
-        if self.duration_seconds < config.min_duration_seconds:
+        # 2. Channel Count
+        if self.channels <= 0:
+            errors.append(f"Channel count must be a positive integer > 0 (got {self.channels}).")
+        elif self.channels > 8:
+            errors.append(f"Channel count ({self.channels}) exceeds supported multichannel limit (8).")
+
+        # Dimensional consistency between array and declared channels
+        if has_valid_data and self.channels > 0:
+            if self.channels == 1:
+                if self.audio_data.ndim != 1 and not (self.audio_data.ndim == 2 and self.audio_data.shape[1] == 1):
+                    errors.append(f"Audio array shape {self.audio_data.shape} does not match mono channel count.")
+                    has_valid_data = False
+            else:
+                if self.audio_data.ndim != 2 or self.audio_data.shape[1] != self.channels:
+                    errors.append(
+                        f"Audio array shape {self.audio_data.shape} does not match expected {self.channels} channels."
+                    )
+                    has_valid_data = False
+
+        if self.channels > 0 and self.channels != config.target_channels:
             warnings.append(
+                f"Audio has {self.channels} channels; target is "
+                f"{config.target_channels} channel (mono conversion will be required in preprocessing)."
+            )
+
+        # 3. Sample Rate
+        if self.sample_rate <= 0:
+            errors.append(f"Sample rate must be a positive integer > 0 (got {self.sample_rate} Hz).")
+        elif self.sample_rate < 8000:
+            warnings.append(
+                f"Sample rate ({self.sample_rate} Hz) is very low for speech analysis; "
+                f"target is {config.target_sample_rate} Hz."
+            )
+
+        if self.sample_rate > 0 and self.sample_rate != config.target_sample_rate:
+            warnings.append(
+                f"Sample rate is {self.sample_rate} Hz; target is "
+                f"{config.target_sample_rate} Hz (resampling will be required in preprocessing)."
+            )
+
+        # 4. Duration Limits (5-120s acceptable, 30-60s recommended)
+        if self.duration_seconds < config.min_duration_seconds:
+            errors.append(
                 f"Duration ({self.duration_seconds:.2f}s) is below the minimum acceptable "
                 f"threshold ({config.min_duration_seconds:.1f}s)."
             )
         elif self.duration_seconds > config.max_duration_seconds:
-            warnings.append(
+            errors.append(
                 f"Duration ({self.duration_seconds:.2f}s) exceeds the maximum allowed "
                 f"duration ({config.max_duration_seconds:.1f}s)."
             )
         elif self.duration_seconds < config.recommended_min_duration:
             warnings.append(
-                f"Duration ({self.duration_seconds:.2f}s) is shorter than recommended "
+                f"Duration ({self.duration_seconds:.2f}s) is acceptable but shorter than recommended "
                 f"({config.recommended_min_duration:.1f}-{config.recommended_max_duration:.1f}s)."
             )
         elif self.duration_seconds > config.recommended_max_duration:
             warnings.append(
-                f"Duration ({self.duration_seconds:.2f}s) is longer than recommended "
+                f"Duration ({self.duration_seconds:.2f}s) is acceptable but longer than recommended "
                 f"({config.recommended_min_duration:.1f}-{config.recommended_max_duration:.1f}s)."
             )
 
-        if self.channels != config.target_channels:
-            warnings.append(
-                f"Audio has {self.channels} channels; target is "
-                f"{config.target_channels} channel (mono)."
-            )
+        # 5. Silence & Amplitude Checks
+        is_silent = False
+        if has_valid_data and self.num_samples > 0:
+            peak_amplitude = float(np.max(np.abs(self.audio_data)))
+            if peak_amplitude == 0.0:
+                is_silent = True
+                warnings.append("Audio waveform contains only silence (all zero values).")
+            elif peak_amplitude > 1.001:
+                warnings.append(
+                    f"Audio waveform exhibits amplitude clipping/over-range (peak: {peak_amplitude:.3f} > 1.0)."
+                )
 
-        if self.sample_rate != config.target_sample_rate:
-            warnings.append(
-                f"Sample rate is {self.sample_rate} Hz; target is "
-                f"{config.target_sample_rate} Hz."
-            )
-
-        is_valid = (
-            self.num_samples > 0
-            and config.min_duration_seconds <= self.duration_seconds <= config.max_duration_seconds
-        )
-
+        # Overall validity
+        is_valid = len(errors) == 0
         meets_recommended = (
-            config.recommended_min_duration <= self.duration_seconds <= config.recommended_max_duration
+            is_valid
+            and config.recommended_min_duration <= self.duration_seconds <= config.recommended_max_duration
+        )
+        is_target_spec = (
+            is_valid
+            and meets_recommended
+            and self.channels == config.target_channels
+            and self.sample_rate == config.target_sample_rate
         )
 
-        return {
-            "is_valid": is_valid,
-            "is_target_spec": self.is_target_spec(config),
-            "meets_recommended_duration": meets_recommended,
-            "is_target_sample_rate": self.sample_rate == config.target_sample_rate,
-            "is_mono": self.is_mono,
-            "sample_rate": self.sample_rate,
-            "channels": self.channels,
-            "duration_seconds": round(self.duration_seconds, 3),
-            "warnings": warnings,
-        }
+        result = ValidationResult(
+            is_valid=is_valid,
+            is_target_spec=is_target_spec,
+            meets_recommended_duration=meets_recommended,
+            is_target_sample_rate=(self.sample_rate == config.target_sample_rate),
+            is_mono=self.is_mono,
+            has_valid_data=has_valid_data,
+            is_silent=is_silent,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            duration_seconds=self.duration_seconds,
+            num_samples=self.num_samples,
+            errors=errors,
+            warnings=warnings,
+        )
+
+        if strict:
+            result.raise_if_invalid()
+
+        return result
+
 
 
 # ===========================================================================
@@ -418,6 +585,119 @@ def save_wav_file(
 
 
 # ===========================================================================
+# Validation Functions
+# ===========================================================================
+
+def validate_audio_recording(
+    recording: AudioRecording,
+    config: AudioConfig = AUDIO_CONFIG,
+    strict: bool = False,
+) -> ValidationResult:
+    """
+    Validate an in-memory AudioRecording against pipeline constraints.
+
+    Parameters:
+        recording: AudioRecording to validate.
+        config: Centralized AudioConfig settings.
+        strict: If True, raises a typed AudioValidationError on failure.
+
+    Returns:
+        ValidationResult with validation flags and diagnostics.
+    """
+    return recording.validate(config=config, strict=strict)
+
+
+def validate_audio_file(
+    file_path: Union[str, Path],
+    config: AudioConfig = AUDIO_CONFIG,
+    strict: bool = False,
+) -> ValidationResult:
+    """
+    Validate a local audio file against format, corruptibility, and pipeline constraints.
+
+    Parameters:
+        file_path: Absolute or relative path to the local audio file.
+        config: Centralized AudioConfig settings.
+        strict: If True, raises typed exceptions on failure.
+
+    Returns:
+        ValidationResult with validation flags, errors, and warnings.
+    """
+    path = Path(file_path).resolve()
+
+    # 1. Existence check
+    if not path.exists() or not path.is_file():
+        err = f"Audio file not found: {path}"
+        if strict:
+            raise AudioNotFoundError(err)
+        return ValidationResult(
+            is_valid=False,
+            is_target_spec=False,
+            meets_recommended_duration=False,
+            is_target_sample_rate=False,
+            is_mono=False,
+            has_valid_data=False,
+            is_silent=False,
+            sample_rate=0,
+            channels=0,
+            duration_seconds=0.0,
+            num_samples=0,
+            errors=[err],
+            warnings=[],
+        )
+
+    # 2. Format / extension validation
+    ext = path.suffix.lower()
+    valid_exts = tuple(e.lower() for e in config.supported_extensions)
+    if ext not in valid_exts:
+        err = (
+            f"Unsupported audio format '{path.suffix}'. "
+            f"Supported extensions: {config.supported_extensions}"
+        )
+        if strict:
+            raise AudioFormatError(err)
+        return ValidationResult(
+            is_valid=False,
+            is_target_spec=False,
+            meets_recommended_duration=False,
+            is_target_sample_rate=False,
+            is_mono=False,
+            has_valid_data=False,
+            is_silent=False,
+            sample_rate=0,
+            channels=0,
+            duration_seconds=0.0,
+            num_samples=0,
+            errors=[err],
+            warnings=[],
+        )
+
+    # 3. Read & decode WAV
+    try:
+        recording = load_wav_file(path, config)
+    except (AudioNotFoundError, AudioFormatError, AudioCorruptError) as exc:
+        if strict:
+            raise
+        return ValidationResult(
+            is_valid=False,
+            is_target_spec=False,
+            meets_recommended_duration=False,
+            is_target_sample_rate=False,
+            is_mono=False,
+            has_valid_data=False,
+            is_silent=False,
+            sample_rate=0,
+            channels=0,
+            duration_seconds=0.0,
+            num_samples=0,
+            errors=[str(exc)],
+            warnings=[],
+        )
+
+    return recording.validate(config=config, strict=strict)
+
+
+# ===========================================================================
 # Extensible Audio Input Sources (Clean Abstraction)
 # ===========================================================================
 
@@ -523,11 +803,25 @@ class VoiceRecordingInterface:
         """
         return source.read()
 
-    def verify(self, recording: AudioRecording) -> Dict[str, Any]:
+    def verify(
+        self,
+        recording: AudioRecording,
+        strict: bool = False,
+    ) -> ValidationResult:
         """
         Verify whether an AudioRecording meets pipeline requirements.
         """
-        return recording.validate(self.config)
+        return recording.validate(self.config, strict=strict)
+
+    def validate_file(
+        self,
+        file_path: Union[str, Path],
+        strict: bool = False,
+    ) -> ValidationResult:
+        """
+        Validate a local audio file against format, corruptibility, and pipeline constraints.
+        """
+        return validate_audio_file(file_path, self.config, strict=strict)
 
     def save(
         self,
@@ -539,3 +833,4 @@ class VoiceRecordingInterface:
         Save an AudioRecording to disk as a standard PCM WAV file.
         """
         return save_wav_file(recording, output_path, overwrite=overwrite)
+

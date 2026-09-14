@@ -33,18 +33,27 @@ from .config import (
 )
 from .recording import (
     STANDARDIZED_RECORDING_PROMPT,
+    AudioChannelError,
     AudioCorruptError,
+    AudioDataError,
+    AudioDurationError,
     AudioError,
     AudioFormatError,
     AudioInputSource,
     AudioNotFoundError,
     AudioRecording,
+    AudioSampleRateError,
+    AudioValidationError,
     BufferInputSource,
     LocalFileInputSource,
+    ValidationResult,
     VoiceRecordingInterface,
     extract_participant_id,
     load_wav_bytes,
     load_wav_file,
     save_wav_file,
+    validate_audio_file,
+    validate_audio_recording,
 )
+
 
