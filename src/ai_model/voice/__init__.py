@@ -120,5 +120,43 @@ from .dataset import (
     load_voice_dataset,
     save_voice_dataset,
 )
+from .model import (
+    BaseVoiceClassifier,
+    ModelCorruptError,
+    ModelError,
+    ModelInputError,
+    ModelNotFoundError,
+    ModelNotFittedError,
+    ModelSerializationError,
+    VoiceBaselineClassifier,
+    VoiceLogisticRegression,
+    VoiceLogisticRegressionClassifier,
+    VoiceRandomForest,
+    VoiceRandomForestClassifier,
+    load_voice_model,
+    save_voice_model,
+    separate_features_and_target,
+)
+from .evaluation import (
+    ConfusionMatrixResult,
+    EvaluationError,
+    EvaluationInputError,
+    EvaluationMetrics,
+    VoiceConfusionMatrix,
+    VoiceConfusionMatrixResult,
+    VoiceEvaluationMetrics,
+    VoiceModelMetrics,
+    calculate_classification_metrics,
+    calculate_voice_confusion_matrix,
+    calculate_voice_metrics,
+    compute_confusion_matrix,
+    compute_voice_confusion_matrix,
+    compute_voice_metrics,
+    evaluate_confusion_matrix,
+    evaluate_voice_confusion_matrix,
+    evaluate_voice_model,
+)
+
+
 
 
