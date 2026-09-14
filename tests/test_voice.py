@@ -57,17 +57,24 @@ from src.ai_model.voice.preprocessing import (
     trim_silence,
 )
 from src.ai_model.voice.features import (
+    ENERGY_FEATURE_NAMES,
     PITCH_FEATURE_NAMES,
+    EnergyFeatureDict,
     FeatureExtractionError,
     VoiceFeatureExtractor,
+    compute_energy_frames,
     compute_mfcc_frames,
     compute_pitch_frames,
+    extract_energy,
+    extract_energy_dict,
+    extract_energy_features,
     extract_mfcc,
     extract_mfcc_dict,
     extract_mfcc_features,
     extract_pitch,
     extract_pitch_dict,
     extract_pitch_features,
+    get_energy_feature_names,
     get_mfcc_feature_names,
     get_pitch_feature_names,
 )
@@ -1410,6 +1417,187 @@ def test_mfcc_behavior_unmodified():
     assert mfcc_feats.shape == (26,)
     assert mfcc_feats.dtype == np.float32
     assert np.all(np.isfinite(mfcc_feats))
+
+
+# ===========================================================================
+# Tests — RMS Energy Feature Extraction (Commit 10)
+# ===========================================================================
+
+def test_extract_energy_normal_audio():
+    """Verify energy extraction produces fixed-length 3D vector [mean, std, range]."""
+    sr = 16_000
+    t = np.linspace(0, 2.0, sr * 2, endpoint=False)
+    # Amplitude modulated wave to give variation/range
+    carrier = np.sin(2 * np.pi * 440 * t)
+    modulator = 0.5 * (1.0 + np.sin(2 * np.pi * 2 * t))
+    audio = (carrier * modulator * 0.8).astype(np.float32)
+
+    energy_features = extract_energy_features(audio, sample_rate=sr)
+
+    assert isinstance(energy_features, np.ndarray)
+    assert energy_features.shape == (3,)
+    assert energy_features.dtype == np.float32
+    assert np.all(np.isfinite(energy_features))
+
+    mean_val, std_val, range_val = energy_features
+    assert mean_val > 0.0
+    assert std_val > 0.0
+    assert range_val > 0.0
+    assert range_val >= std_val
+
+
+def test_extract_energy_silent_audio():
+    """Verify completely silent audio safely returns zero vector without NaN/Inf."""
+    sr = 16_000
+    silent_audio = np.zeros(sr * 3, dtype=np.float32)
+
+    energy_features = extract_energy_features(silent_audio, sample_rate=sr)
+
+    assert isinstance(energy_features, np.ndarray)
+    assert energy_features.shape == (3,)
+    assert energy_features.dtype == np.float32
+    assert not np.any(np.isnan(energy_features))
+    assert not np.any(np.isinf(energy_features))
+    assert np.all(energy_features == 0.0)
+
+
+def test_extract_energy_from_preprocessed_audio(synthetic_wav_file: Path):
+    """Verify energy extraction accepts PreprocessedAudio container."""
+    preprocessed = preprocess_audio(synthetic_wav_file)
+
+    energy_features = extract_energy_features(preprocessed)
+
+    assert isinstance(energy_features, np.ndarray)
+    assert energy_features.shape == (3,)
+    assert energy_features.dtype == np.float32
+    assert np.all(np.isfinite(energy_features))
+
+
+def test_extract_energy_from_audio_recording(synthetic_wav_file: Path):
+    """Verify energy extraction accepts AudioRecording container."""
+    recording = load_wav_file(synthetic_wav_file)
+
+    energy_features = extract_energy_features(recording)
+
+    assert isinstance(energy_features, np.ndarray)
+    assert energy_features.shape == (3,)
+    assert energy_features.dtype == np.float32
+    assert np.all(np.isfinite(energy_features))
+
+
+def test_extract_energy_invalid_inputs():
+    """Verify safe validation against empty, non-finite, multi-dimensional, and invalid sizes."""
+    # Empty audio
+    with pytest.raises(AudioDataError, match="empty"):
+        extract_energy_features(np.array([], dtype=np.float32))
+
+    # Non-finite values
+    with pytest.raises(AudioDataError, match="non-finite"):
+        extract_energy_features(np.array([0.1, np.nan], dtype=np.float32))
+
+    # 2D stereo array
+    with pytest.raises(AudioDataError, match="1D"):
+        extract_energy_features(np.zeros((16000, 2), dtype=np.float32))
+
+    # Invalid sample rate
+    with pytest.raises(AudioSampleRateError, match="positive"):
+        extract_energy_features(np.ones(1000, dtype=np.float32), sample_rate=0)
+
+    # Invalid frame or hop length
+    with pytest.raises(ValueError, match="positive"):
+        extract_energy_features(np.ones(1000, dtype=np.float32), frame_length=-2048)
+
+    with pytest.raises(ValueError, match="positive"):
+        extract_energy_features(np.ones(1000, dtype=np.float32), hop_length=0)
+
+    # Unsupported type
+    with pytest.raises(TypeError, match="Unsupported audio input type"):
+        extract_energy_features("not_audio")  # type: ignore
+
+
+def test_get_energy_feature_names():
+    """Verify energy feature names list."""
+    names = get_energy_feature_names()
+    assert names == ["energy_mean", "energy_std", "energy_range"]
+    assert len(names) == 3
+
+
+def test_extract_energy_dict():
+    """Verify extract_energy_dict produces clear dictionary mapping and alias support."""
+    sr = 16_000
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.7).astype(np.float32)
+
+    feat_dict = extract_energy_dict(audio, sample_rate=sr)
+
+    assert isinstance(feat_dict, dict)
+    assert len(feat_dict) == 3
+    assert "energy_mean" in feat_dict
+    assert "energy_std" in feat_dict
+    assert "energy_range" in feat_dict
+    # Verify transparent alias access for variation
+    assert feat_dict["energy_variation"] == feat_dict["energy_range"]
+    assert feat_dict.get("energy_variation") == feat_dict["energy_range"]
+    for k, v in feat_dict.items():
+        assert isinstance(k, str)
+        assert isinstance(v, float)
+        assert np.isfinite(v)
+
+
+def test_compute_energy_frames():
+    """Verify compute_energy_frames returns 2D RMS energy contour."""
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.6).astype(np.float32)
+
+    frames = compute_energy_frames(audio, sample_rate=sr)
+
+    assert isinstance(frames, np.ndarray)
+    assert frames.ndim == 2
+    assert frames.shape[0] == 1
+    assert frames.shape[1] > 0
+    assert frames.dtype == np.float32
+    assert np.all(np.isfinite(frames))
+
+
+def test_voice_feature_extractor_energy_methods():
+    """Verify VoiceFeatureExtractor exposes energy extraction methods."""
+    extractor = VoiceFeatureExtractor()
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 350 * t) * 0.5).astype(np.float32)
+
+    # Energy vector
+    energy_vec = extractor.extract_energy(audio, sample_rate=sr)
+    assert energy_vec.shape == (3,)
+    assert energy_vec.dtype == np.float32
+
+    # Energy dict
+    energy_dict = extractor.extract_energy_dict(audio, sample_rate=sr)
+    assert len(energy_dict) == 3
+
+    # Energy frames
+    frames = extractor.compute_energy_frames(audio, sample_rate=sr)
+    assert frames.shape[0] == 1
+    assert frames.shape[1] > 0
+
+    # Energy names
+    names = extractor.get_energy_feature_names()
+    assert names == ["energy_mean", "energy_std", "energy_range"]
+
+
+def test_mfcc_and_pitch_behavior_unmodified():
+    """Verify MFCC and pitch extraction continue to operate unmodified."""
+    sr = 16_000
+    t = np.linspace(0, 2.0, sr * 2, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.8).astype(np.float32)
+
+    mfcc_feats = extract_mfcc_features(audio, sample_rate=sr)
+    assert mfcc_feats.shape == (26,)
+
+    pitch_feats = extract_pitch_features(audio, sample_rate=sr)
+    assert pitch_feats.shape == (4,)
+
 
 
 

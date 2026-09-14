@@ -1,5 +1,5 @@
 """
-Voice Modality — Acoustic Feature Extraction: MFCC & Pitch Extraction
+Voice Modality — Acoustic Feature Extraction: MFCC, Pitch & Energy Extraction
 
 Extracts acoustic feature representations from preprocessed 16 kHz mono
 audio signals for stress and risk classification models.
@@ -10,6 +10,8 @@ Features Implemented:
     - Fundamental Frequency / Pitch (F0): Computed via librosa.pyin with
       mean, standard deviation, minimum, and maximum extracted from valid voiced frames
       only (fixed-length 4D).
+    - Root Mean Square (RMS) Energy: Frame-level energy contour aggregated
+      using mean, standard deviation, and variation/range (fixed-length 3D).
     - Robust unvoiced/silent audio handling without NaN or Inf values.
     - Reusable controller (VoiceFeatureExtractor) and functional APIs.
 
@@ -18,7 +20,7 @@ Specifications adhere to:
     - Input: 16 kHz, mono, 1D float32 waveform (or PreprocessedAudio/AudioRecording)
 
 Note:
-    - Energy, spectral features, and ML modeling are deferred to subsequent commits.
+    - Spectral descriptors and ML modeling are deferred to subsequent commits.
 """
 
 from dataclasses import dataclass, field
@@ -63,6 +65,12 @@ PITCH_FEATURE_NAMES: Tuple[str, ...] = (
     "pitch_max",
 )
 
+ENERGY_FEATURE_NAMES: Tuple[str, ...] = (
+    "energy_mean",
+    "energy_std",
+    "energy_range",
+)
+
 
 def get_mfcc_feature_names(
     n_mfcc: int = FEATURE_CONFIG.n_mfcc,
@@ -98,6 +106,41 @@ def get_pitch_feature_names() -> List[str]:
         List of pitch feature names: ['pitch_mean', 'pitch_std', 'pitch_min', 'pitch_max'].
     """
     return list(PITCH_FEATURE_NAMES)
+
+
+def get_energy_feature_names() -> List[str]:
+    """
+    Generate standard feature column names for aggregated RMS energy vectors.
+
+    Returns:
+        List of energy feature names: ['energy_mean', 'energy_std', 'energy_range'].
+    """
+    return list(ENERGY_FEATURE_NAMES)
+
+
+class EnergyFeatureDict(dict):
+    """
+    Dictionary container for energy features.
+    Provides transparent access for both 'energy_range' and 'energy_variation'
+    as well as 'energy_rms_*' aliases.
+    """
+
+    def __getitem__(self, key: str) -> float:
+        if key in self:
+            return super().__getitem__(key)
+        if key in ("energy_variation", "energy_rms_range", "energy_rms_variation") and "energy_range" in self:
+            return super().__getitem__("energy_range")
+        if key == "energy_rms_mean" and "energy_mean" in self:
+            return super().__getitem__("energy_mean")
+        if key == "energy_rms_std" and "energy_std" in self:
+            return super().__getitem__("energy_std")
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 # ===========================================================================
@@ -469,6 +512,186 @@ def extract_pitch_dict(
 
 
 # ===========================================================================
+# Frame-Level RMS Energy Extraction
+# ===========================================================================
+
+def compute_energy_frames(
+    audio_data: np.ndarray,
+    sample_rate: int = AUDIO_CONFIG.target_sample_rate,
+    config: FeatureConfig = FEATURE_CONFIG,
+    frame_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Compute frame-level Root Mean Square (RMS) energy contour using librosa.feature.rms.
+
+    Parameters:
+        audio_data: 1D numpy array of mono audio waveform.
+        sample_rate: Audio sampling rate in Hz (default: 16,000 Hz).
+        config: FeatureConfig containing default frame and hop sizes.
+        frame_length: Analysis window length in samples (default: config.mfcc_n_fft = 2048).
+        hop_length: Hop length between analysis frames in samples (default: config.mfcc_hop_length = 512).
+
+    Returns:
+        2D numpy array of shape (1, n_frames) with float32 dtype.
+
+    Raises:
+        AudioDataError: If audio_data is empty, not 1D, or contains non-finite values.
+        AudioSampleRateError: If sample_rate <= 0.
+        ValueError: If frame_length <= 0 or hop_length <= 0.
+    """
+    if audio_data is None or audio_data.size == 0:
+        raise AudioDataError("Cannot extract energy features from empty audio array.")
+
+    if not np.all(np.isfinite(audio_data)):
+        raise AudioDataError("Audio waveform contains non-finite values (NaN or Inf).")
+
+    if audio_data.ndim != 1:
+        raise AudioDataError(
+            f"Input audio must be a 1D mono waveform, got shape {audio_data.shape}."
+        )
+
+    if sample_rate <= 0:
+        raise AudioSampleRateError(f"Sample rate must be positive, got {sample_rate}.")
+
+    frame_len = frame_length if frame_length is not None else config.mfcc_n_fft
+    hop_len = hop_length if hop_length is not None else config.mfcc_hop_length
+
+    if frame_len <= 0:
+        raise ValueError(f"frame_length must be positive, got {frame_len}.")
+    if hop_len <= 0:
+        raise ValueError(f"hop_length must be positive, got {hop_len}.")
+
+    y = np.asarray(audio_data, dtype=np.float32)
+
+    # Completely silent audio: return zeros directly
+    if np.max(np.abs(y)) == 0.0:
+        n_frames = max(1, int(np.ceil(len(y) / hop_len)))
+        return np.zeros((1, n_frames), dtype=np.float32)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore")
+        rms = librosa.feature.rms(
+            y=y,
+            frame_length=frame_len,
+            hop_length=hop_len,
+        )
+
+    return rms.astype(np.float32)
+
+
+# ===========================================================================
+# Fixed-Length Aggregated RMS Energy Feature Extraction
+# ===========================================================================
+
+def extract_energy_features(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    frame_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Extract fixed-length RMS energy features (mean, std, range/variation) from audio.
+
+    - Computes frame-level RMS energy contour reflecting vocal intensity.
+    - Summarizes contour with mean, standard deviation, and variation (range = max - min).
+    - Safely handles completely silent audio by returning 0.0 for all statistics without NaN/Inf.
+    - Returns fixed-length 1D float32 array of shape (3,): [energy_mean, energy_std, energy_range].
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio container, or AudioRecording container.
+        sample_rate: Audio sampling rate in Hz (defaults to container rate or 16,000 Hz).
+        config: FeatureConfig extraction settings.
+        frame_length: Analysis window size (default: config.mfcc_n_fft = 2048).
+        hop_length: Hop length between frames (default: config.mfcc_hop_length = 512).
+
+    Returns:
+        1D numpy array of shape (3,) with float32 dtype: [mean, std, range].
+
+    Raises:
+        AudioDataError: If audio is empty, non-finite, or not 1D mono.
+        AudioSampleRateError: If sample rate <= 0.
+        ValueError: If frame_length or hop_length <= 0.
+        TypeError: If audio is not a supported input type.
+    """
+    # Unpack audio and sample rate from input containers
+    if isinstance(audio, PreprocessedAudio):
+        audio_data = audio.audio_data
+        sr = sample_rate if sample_rate is not None else audio.sample_rate
+    elif isinstance(audio, AudioRecording):
+        audio_data = audio.audio_data
+        sr = sample_rate if sample_rate is not None else audio.sample_rate
+    elif isinstance(audio, np.ndarray):
+        audio_data = audio
+        sr = sample_rate if sample_rate is not None else AUDIO_CONFIG.target_sample_rate
+    else:
+        raise TypeError(
+            f"Unsupported audio input type: {type(audio)}. "
+            "Expected np.ndarray, PreprocessedAudio, or AudioRecording."
+        )
+
+    rms_matrix = compute_energy_frames(
+        audio_data=audio_data,
+        sample_rate=sr,
+        config=config,
+        frame_length=frame_length,
+        hop_length=hop_length,
+    )
+
+    rms_frames = rms_matrix.flatten()
+
+    if len(rms_frames) == 0 or np.max(np.abs(audio_data)) == 0.0:
+        return np.zeros(3, dtype=np.float32)
+
+    energy_mean = float(np.mean(rms_frames))
+    energy_std = float(np.std(rms_frames))
+    energy_range = float(np.max(rms_frames) - np.min(rms_frames))
+
+    return np.array([energy_mean, energy_std, energy_range], dtype=np.float32)
+
+
+# Alias for concise API usage
+extract_energy = extract_energy_features
+
+
+def extract_energy_dict(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    frame_length: Optional[int] = None,
+    hop_length: Optional[int] = None,
+) -> EnergyFeatureDict:
+    """
+    Extract fixed-length energy features and return them as an EnergyFeatureDict.
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio, or AudioRecording.
+        sample_rate: Audio sampling frequency in Hz.
+        config: FeatureConfig settings.
+        frame_length: Analysis window size.
+        hop_length: Hop length.
+
+    Returns:
+        EnergyFeatureDict mapping feature names ('energy_mean', 'energy_std', 'energy_range')
+        to float values (supports 'energy_variation' access).
+    """
+    features = extract_energy_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        frame_length=frame_length,
+        hop_length=hop_length,
+    )
+
+    return EnergyFeatureDict({
+        "energy_mean": float(features[0]),
+        "energy_std": float(features[1]),
+        "energy_range": float(features[2]),
+    })
+
+
+# ===========================================================================
 # Reusable Feature Extractor Controller
 # ===========================================================================
 
@@ -590,4 +813,59 @@ class VoiceFeatureExtractor:
             config=self.config,
             fmin=fmin,
             fmax=fmax,
+        )
+
+    # --- Energy Methods ---
+
+    def get_energy_feature_names(self) -> List[str]:
+        """Get list of energy feature names."""
+        return get_energy_feature_names()
+
+    def compute_energy_frames(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: Optional[int] = None,
+        frame_length: Optional[int] = None,
+        hop_length: Optional[int] = None,
+    ) -> np.ndarray:
+        """Compute frame-level RMS energy contour."""
+        sr = sample_rate if sample_rate is not None else self.audio_config.target_sample_rate
+        return compute_energy_frames(
+            audio_data=audio_data,
+            sample_rate=sr,
+            config=self.config,
+            frame_length=frame_length,
+            hop_length=hop_length,
+        )
+
+    def extract_energy(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        frame_length: Optional[int] = None,
+        hop_length: Optional[int] = None,
+    ) -> np.ndarray:
+        """Extract fixed-length energy feature vector."""
+        return extract_energy_features(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            frame_length=frame_length,
+            hop_length=hop_length,
+        )
+
+    def extract_energy_dict(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        frame_length: Optional[int] = None,
+        hop_length: Optional[int] = None,
+    ) -> EnergyFeatureDict:
+        """Extract fixed-length energy features as an EnergyFeatureDict."""
+        return extract_energy_dict(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            frame_length=frame_length,
+            hop_length=hop_length,
         )
