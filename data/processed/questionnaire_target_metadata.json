@@ -1,0 +1,23 @@
+{
+  "target_column": "stress_level",
+  "target_encoded_column": "stress_level_encoded",
+  "target_source": "Q4_encoded",
+  "target_type": "three_class",
+  "classes": [
+    "low",
+    "moderate",
+    "high"
+  ],
+  "encoding": {
+    "low": 0,
+    "moderate": 1,
+    "high": 2
+  },
+  "excluded_predictor_columns": [
+    "Q4",
+    "Q4_encoded",
+    "stress_level",
+    "stress_level_encoded"
+  ],
+  "clinical_diagnosis": false
+}

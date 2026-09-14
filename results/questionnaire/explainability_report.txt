@@ -1,0 +1,75 @@
+Questionnaire Explainability Report
+==================================
+
+Selected model: random_forest
+Selection basis: Selected Random Forest because its cross-validation Macro F1 mean (0.5518) and Balanced Accuracy mean (0.5611) were higher than Logistic Regression.
+
+Model comparison (cross-validation based):
+- Logistic Regression: Macro F1 mean=0.5073, Balanced Accuracy mean=0.5278
+- Random Forest: Macro F1 mean=0.5518, Balanced Accuracy mean=0.5611
+
+Top Random Forest features (top 15):
+- 1. stress_impact_dimension: importance=0.072687
+- 2. overwhelm_dimension: importance=0.068401
+- 3. Q9_encoded: importance=0.065825
+- 4. Q12_encoded: importance=0.053642
+- 5. stress_behavior_dimension: importance=0.045859
+- 6. emotional_strain_dimension: importance=0.037132
+- 7. Q19_encoded: importance=0.035103
+- 8. Q6_encoded: importance=0.033389
+- 9. Q5_encoded: importance=0.033102
+- 10. Q2_coding_technical_assessments: importance=0.033070
+- 11. Q7_encoded: importance=0.029519
+- 12. Q10_Internship_job_applications: importance=0.027111
+- 13. Q10_Fear_of_not_getting_a_job: importance=0.026754
+- 14. Q2_applying_for_jobs_internships: importance=0.021456
+- 15. Q3_encoded: importance=0.018892
+
+Logistic Regression coefficient summary:
+- Coefficients were extracted for each class and ranked within class by absolute coefficient magnitude.
+- Interpretation is model-association only; coefficients are not treated as causal effects.
+- Strongest positive coefficients:
+  * moderate: Q19_encoded = 0.597520
+  * high: Q6_encoded = 0.506119
+  * high: Q11_Worried = 0.483401
+  * high: Q10_Difficulty_balancing_academics_and_personal_life = 0.391447
+  * low: Q11_Happy = 0.357664
+- Strongest negative coefficients:
+  * moderate: Q11_Worried = -0.562582
+  * low: Q19_encoded = -0.444710
+  * moderate: Q2_coding_technical_assessments = -0.435916
+  * low: Q5_encoded = -0.383998
+  * moderate: Q16_varies = -0.370578
+
+Confidence methodology:
+- Model confidence is a project-level heuristic, not clinical certainty.
+- For each OOF prediction, confidence is calculated as 0.5 * max_probability + 0.5 * probability_margin.
+- probability_margin = largest_probability - second_largest_probability.
+- confidence_level thresholds: high >= 0.70, moderate >= 0.50, else low.
+
+OOF confidence analysis:
+- Mean confidence: 0.3818
+- Median confidence: 0.3544
+- Standard deviation: 0.1412
+- Mean confidence by true class: low=0.3165, moderate=0.3379, high=0.4402
+- Confidence for correct predictions: 0.4221
+- Confidence for incorrect predictions: 0.3173
+
+Top factors for the selected model:
+1. stress_impact_dimension (direction=increases_risk, importance=0.072687)
+2. overwhelm_dimension (direction=increases_risk, importance=0.068401)
+3. Q9_encoded (direction=model_associated, importance=0.065825)
+4. Q12_encoded (direction=model_associated, importance=0.053642)
+5. stress_behavior_dimension (direction=increases_risk, importance=0.045859)
+
+Limitations:
+- Only 52 real respondents were available.
+- Explanations represent model associations, not causation.
+- Confidence is a project-level model-confidence indicator and is not clinical certainty.
+- The system is non-clinical.
+- Small sample size limits the reliability of explanations and confidence summaries.
+- Feature importance may be affected by correlated predictors.
+
+Validation notes:
+- Model selection was performed from cross-validation results only.
+- No retraining or hyperparameter tuning was performed in this step.

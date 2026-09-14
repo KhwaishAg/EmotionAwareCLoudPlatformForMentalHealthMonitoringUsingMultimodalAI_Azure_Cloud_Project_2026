@@ -1,0 +1,61 @@
+Categorical Encoding Report
+==========================
+Input rows: 52
+Output rows: 52
+
+Q1 category counts:
+- 1st Year: 6
+- 2nd Year: 14
+- 3rd Year: 10
+- 4th Year: 20
+- Postgraduate: 2
+
+Q1 mapping:
+- 1st Year -> 1
+- 2nd Year -> 2
+- 3rd Year -> 3
+- 4th Year -> 4
+- Postgraduate -> 5
+
+Q2 canonical options:
+- Regular academic semester
+- Preparing for examinations
+- Working on academic projects
+- Facing assignment/deadline pressure
+- Preparing for placements & internships
+- Preparing for coding/technical assessments
+- Applying for jobs/internships
+
+Q2 option frequencies:
+- Applying for jobs/internships: 19
+- Facing assignment/deadline pressure: 22
+- Preparing for coding/technical assessments: 22
+- Preparing for examinations: 21
+- Preparing for placements & internships: 24
+- Regular academic semester: 29
+- Working on academic projects: 27
+
+Q2 missing count: 0
+Q2 unexpected options: None
+Q2 All of them count: 1
+
+Q25 category frequencies:
+- Academic workload: 5
+- Career uncertainty: 7
+- Coding/technical assessments: 4
+- Examinations: 6
+- Family expectations: 1
+- Financial concerns: 1
+- Other: 5
+- Placements/job search: 10
+- Social/personal issues: 7
+
+Q25 missing count: 6
+Q25 unexpected categories: None
+
+Validation result: PASS
+
+Final feature counts:
+- Q1 encoded features: 1
+- Q2 encoded features: 7
+- Q25 encoded features: 9

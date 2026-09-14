@@ -1,0 +1,26 @@
+# Python
+
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+
+.venv/
+venv/
+env/
+
+# Secrets
+
+.env
+.env.*
+
+# Local respondent-level questionnaire data
+
+data/raw/
+data/processed/questionnaire_cleaned.csv
+data/processed/questionnaire_categorical_encoded.csv
+data/processed/questionnaire_multihot_encoded.csv
+data/processed/questionnaire_ordinal_encoded.csv
+data/processed/questionnaire_features.csv
+data/processed/questionnaire_with_target.csv

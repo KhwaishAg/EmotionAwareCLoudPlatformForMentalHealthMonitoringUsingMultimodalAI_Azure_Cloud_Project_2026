@@ -1,0 +1,36 @@
+{
+  "selected_model": "random_forest",
+  "top_features": [
+    {
+      "feature": "stress_impact_dimension",
+      "importance": 0.07268658457535886,
+      "direction": "increases_risk"
+    },
+    {
+      "feature": "overwhelm_dimension",
+      "importance": 0.06840121904394131,
+      "direction": "increases_risk"
+    },
+    {
+      "feature": "Q9_encoded",
+      "importance": 0.0658247875795072,
+      "direction": "model_associated"
+    },
+    {
+      "feature": "Q12_encoded",
+      "importance": 0.05364184212471154,
+      "direction": "model_associated"
+    },
+    {
+      "feature": "stress_behavior_dimension",
+      "importance": 0.045858534286326164,
+      "direction": "increases_risk"
+    }
+  ],
+  "confidence_method": "confidence = 0.5 * max_probability + 0.5 * probability_margin, where probability_margin = largest_probability - second_largest_probability.",
+  "confidence_thresholds": {
+    "high": 0.7,
+    "moderate": 0.5
+  },
+  "clinical_certainty": false
+}

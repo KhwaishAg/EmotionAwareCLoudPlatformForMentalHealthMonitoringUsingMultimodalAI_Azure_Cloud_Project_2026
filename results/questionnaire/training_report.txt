@@ -1,0 +1,157 @@
+Questionnaire Model Training Report
+===================================
+Dataset rows: 52
+Predictor feature count: 75
+
+Predictor feature list:
+- Q3_encoded
+- Q5_encoded
+- Q6_encoded
+- Q7_encoded
+- Q8_encoded
+- Q9_encoded
+- Q12_encoded
+- Q13_encoded
+- Q14_encoded
+- Q15_encoded
+- Q16_encoded
+- Q17_encoded
+- Q18_encoded
+- Q19_encoded
+- Q20_encoded
+- Q14_varies
+- Q16_varies
+- Q10_Academic_performance_grades
+- Q10_Academic_workload
+- Q10_Assignments
+- Q10_Coding_technical_assessments
+- Q10_Competition_with_peers
+- Q10_Difficulty_balancing_academics_and_personal_life
+- Q10_Exams
+- Q10_Family_expectations
+- Q10_Fear_of_not_getting_a_job
+- Q10_Financial_concerns
+- Q10_Internship_job_applications
+- Q10_Lack_of_sleep
+- Q10_Placement_preparation
+- Q10_Projects
+- Q10_Relationship_social_concerns
+- Q10_Time_management
+- Q10_Uncertainty_about_career
+- Q10_Other
+- Q10_nothing
+- Q11_Anxious
+- Q11_Calm
+- Q11_Confident
+- Q11_Frustrated
+- Q11_Happy
+- Q11_Irritated
+- Q11_Lonely
+- Q11_Motivated
+- Q11_Neutral
+- Q11_Other
+- Q11_Overwhelmed
+- Q11_Sad
+- Q11_Tired
+- Q11_Worried
+- Q1_year_encoded
+- Q2_regular_academic_semester
+- Q2_preparing_for_examinations
+- Q2_working_on_academic_projects
+- Q2_assignment_deadline_pressure
+- Q2_placements_internships
+- Q2_coding_technical_assessments
+- Q2_applying_for_jobs_internships
+- Q25_Placements_job_search
+- Q25_Career_uncertainty
+- Q25_Social_personal_issues
+- Q25_Examinations
+- Q25_Other
+- Q25_Academic_workload
+- Q25_Coding_technical_assessments
+- Q25_Financial_concerns
+- Q25_Family_expectations
+- overwhelm_dimension
+- stress_impact_dimension
+- emotional_strain_dimension
+- Q13_stress_aligned
+- stress_persistence_dimension
+- recovery_difficulty_dimension
+- stress_behavior_dimension
+- academic_preparation_load
+
+Excluded columns:
+- Timestamp
+- Q4
+- Q4_encoded
+- stress_level
+- stress_level_encoded
+- Q21
+- Q22
+- Q23
+- Q24
+- Q1
+- Q2
+- Q3
+- Q5
+- Q6
+- Q7
+- Q8
+- Q9
+- Q10
+- Q11
+- Q12
+- Q13
+- Q14
+- Q15
+- Q16
+- Q17
+- Q18
+- Q19
+- Q20
+- Q25
+
+Target distribution:
+- low: 8
+- moderate: 20
+- high: 24
+
+Logistic Regression configuration:
+- C: 1.0
+- class_weight: balanced
+- max_iter: 2000
+- solver: lbfgs
+- random_state: 42
+
+Random Forest configuration:
+- n_estimators: 300
+- max_depth: 4
+- min_samples_leaf: 2
+- class_weight: balanced
+- random_state: 42
+- n_jobs: -1
+
+Preprocessing pipeline:
+- Logistic Regression: SimpleImputer(median) -> StandardScaler -> LogisticRegression
+- Random Forest: SimpleImputer(median) -> RandomForestClassifier
+
+Missing-value strategy:
+- Imputation is performed inside each sklearn Pipeline using SimpleImputer(strategy='median').
+- No global imputation is applied outside the pipeline.
+
+Class balancing strategy:
+- Logistic Regression: class_weight='balanced'
+- Random Forest: class_weight='balanced'
+
+Leakage validation:
+- Target leakage check: PASS
+- Raw questionnaire text columns excluded from predictors: PASS
+- Q4_encoded excluded from predictors: PASS
+
+Artifact paths:
+- Logistic Regression model: D:\Projects\Cloud Project 2026\EmotionAwareCLoudPlatformForMentalHealthMonitoringUsingMultimodalAI_Azure_Cloud_Project_2026\models\questionnaire\logistic_regression.joblib
+- Random Forest model: D:\Projects\Cloud Project 2026\EmotionAwareCLoudPlatformForMentalHealthMonitoringUsingMultimodalAI_Azure_Cloud_Project_2026\models\questionnaire\random_forest.joblib
+- Feature metadata: D:\Projects\Cloud Project 2026\EmotionAwareCLoudPlatformForMentalHealthMonitoringUsingMultimodalAI_Azure_Cloud_Project_2026\models\questionnaire\questionnaire_feature_names.json
+- Training metadata: D:\Projects\Cloud Project 2026\EmotionAwareCLoudPlatformForMentalHealthMonitoringUsingMultimodalAI_Azure_Cloud_Project_2026\models\questionnaire\training_metadata.json
+
+Training-set performance is not used as an estimate of generalization performance. Cross-validation is performed separately in Step 12.

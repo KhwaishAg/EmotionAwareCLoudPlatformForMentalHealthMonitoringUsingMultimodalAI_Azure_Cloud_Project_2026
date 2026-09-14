@@ -1,0 +1,7 @@
+{
+  "selected_model": "random_forest",
+  "selection_basis": "Selected Random Forest because its cross-validation Macro F1 mean (0.5518) and Balanced Accuracy mean (0.5611) were higher than Logistic Regression.",
+  "macro_f1_mean": 0.5517676767676768,
+  "balanced_accuracy_mean": 0.5611111111111111,
+  "cv_based": true
+}

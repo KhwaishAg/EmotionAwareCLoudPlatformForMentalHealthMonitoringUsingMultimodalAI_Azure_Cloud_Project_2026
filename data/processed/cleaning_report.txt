@@ -1,0 +1,12 @@
+Questionnaire Cleaning Report
+============================
+Original row count: 52
+Final row count: 52
+Original column count: 26
+Final column count: 26
+Timestamps that failed parsing: 0
+Duplicate rows detected: 0
+Blank/null values before cleaning: 105
+Blank/null values after cleaning: 105
+String cells whose whitespace was normalized: 159
+Malformed rows detected: []
