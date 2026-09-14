@@ -1,0 +1,33 @@
+# Configuration template only. Deployment has NOT been performed.
+# After creating the endpoint and registering the model, fill in the placeholders and run:
+#   az ml online-deployment create -f deployment.yml \
+#     --workspace-name <workspace-name> --resource-group <resource-group>
+#
+# Replace <questionnaire-endpoint-name> with the same name used in endpoint.yml.template.
+# Replace <questionnaire-random-forest-version> with the registered model version (e.g. 1).
+# Do not commit a filled-in copy of this file.
+
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+
+name: questionnaire-rf-deployment
+endpoint_name: <questionnaire-endpoint-name>
+
+model: azureml:questionnaire-random-forest:<questionnaire-random-forest-version>
+
+# score.py delegates all inference logic to the existing questionnaire prediction
+# pipeline (src/ai_model/questionnaire/predict.py). It does not retrain or
+# reimplement the model; it is a thin Azure ML scoring adapter.
+code_configuration:
+  code: ../../..
+  scoring_script: src/azure/questionnaire/score.py
+
+environment: azureml:questionnaire-sklearn:1
+
+instance_type: Standard_DS2_v2
+instance_count: 1
+
+tags:
+  project: emotion-aware-cloud-platform
+  modality: questionnaire
+  model: questionnaire-random-forest
+  non_clinical: "true"

@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.ai_model.questionnaire import train_models
+from src.ai_model.questionnaire import evaluate_models, explainability, train_models
 
 
 EXPECTED_INPUT_FILE = "questionnaire_with_target.csv"
@@ -27,6 +27,8 @@ REQUIRED_MODEL_ARTIFACTS = (
     "random_forest.joblib",
     "questionnaire_feature_names.json",
     "training_metadata.json",
+    "selected_model.json",
+    "explainability_metadata.json",
 )
 
 
@@ -78,12 +80,32 @@ def run_training(data_file: Path, output_dir: Path) -> None:
         staged_models = work_dir / "models"
         staged_results = work_dir / "results"
 
-        # These paths are changed only in this process, not in train_models.py or its files.
+        # Redirect in-memory artifact locations for this process only
         train_models.MODELS_DIR = staged_models
         train_models.RESULTS_DIR = staged_results
+
+        evaluate_models.MODELS_DIR = staged_models
+        evaluate_models.RESULTS_DIR = staged_results
+
+        explainability.MODELS_DIR = staged_models
+        explainability.RESULTS_DIR = staged_results
+        explainability.MODEL_COMPARISON_PATH = staged_results / "model_comparison.csv"
+        explainability.SELECTED_MODEL_PATH = staged_models / "selected_model.json"
+        explainability.EXPLAINABILITY_METADATA_PATH = staged_models / "explainability_metadata.json"
+
         print("Input validation: PASS")
         print("Training start: delegating to existing questionnaire train_models.run_training")
         train_models.run_training(input_csv_path=staged_input)
+
+        print("Evaluation start: delegating to existing questionnaire evaluate_models.run_evaluation")
+        evaluate_models.run_evaluation(
+            input_csv_path=staged_input,
+            feature_metadata_path=staged_models / "questionnaire_feature_names.json",
+        )
+
+        print("Explainability start: delegating to existing questionnaire explainability.run_explainability")
+        explainability.run_explainability()
+
         validate_artifacts(staged_models)
 
         shutil.copytree(staged_models, output_dir / "models", dirs_exist_ok=True)
