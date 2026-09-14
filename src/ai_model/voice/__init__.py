@@ -65,13 +65,19 @@ from .preprocessing import (
     trim_silence,
 )
 from .features import (
+    PITCH_FEATURE_NAMES,
     FeatureExtractionError,
     VoiceFeatureExtractor,
     compute_mfcc_frames,
+    compute_pitch_frames,
     extract_mfcc,
     extract_mfcc_dict,
     extract_mfcc_features,
+    extract_pitch,
+    extract_pitch_dict,
+    extract_pitch_features,
     get_mfcc_feature_names,
+    get_pitch_feature_names,
 )
 
 

@@ -57,13 +57,19 @@ from src.ai_model.voice.preprocessing import (
     trim_silence,
 )
 from src.ai_model.voice.features import (
+    PITCH_FEATURE_NAMES,
     FeatureExtractionError,
     VoiceFeatureExtractor,
     compute_mfcc_frames,
+    compute_pitch_frames,
     extract_mfcc,
     extract_mfcc_dict,
     extract_mfcc_features,
+    extract_pitch,
+    extract_pitch_dict,
+    extract_pitch_features,
     get_mfcc_feature_names,
+    get_pitch_feature_names,
 )
 
 
@@ -1219,6 +1225,192 @@ def test_voice_feature_extractor_controller():
     # Controller feature names
     names = extractor.get_feature_names()
     assert len(names) == 26
+
+
+# ===========================================================================
+# Tests — Pitch (F0) Feature Extraction (Commit 9)
+# ===========================================================================
+
+def test_extract_pitch_voiced_audio():
+    """Verify pitch extraction computes accurate mean, std, min, and max for voiced tone."""
+    sr = 16_000
+    target_freq = 220.0  # A3 note
+    t = np.linspace(0, 1.5, int(sr * 1.5), endpoint=False)
+    audio = (np.sin(2 * np.pi * target_freq * t) * 0.8).astype(np.float32)
+
+    pitch_features = extract_pitch_features(audio, sample_rate=sr)
+
+    assert isinstance(pitch_features, np.ndarray)
+    assert pitch_features.shape == (4,)
+    assert pitch_features.dtype == np.float32
+    assert np.all(np.isfinite(pitch_features))
+
+    pitch_mean, pitch_std, pitch_min, pitch_max = pitch_features
+    # Mean frequency should be close to 220 Hz
+    assert abs(pitch_mean - target_freq) < 15.0
+    # Min should be <= Mean <= Max
+    assert pitch_min <= pitch_mean <= pitch_max
+    assert pitch_std >= 0.0
+
+
+def test_extract_pitch_silent_audio():
+    """Verify completely silent audio safely returns zero vector without NaN/Inf."""
+    sr = 16_000
+    silent_audio = np.zeros(sr * 2, dtype=np.float32)
+
+    pitch_features = extract_pitch_features(silent_audio, sample_rate=sr)
+
+    assert isinstance(pitch_features, np.ndarray)
+    assert pitch_features.shape == (4,)
+    assert pitch_features.dtype == np.float32
+    assert not np.any(np.isnan(pitch_features))
+    assert not np.any(np.isinf(pitch_features))
+    assert np.all(pitch_features == 0.0)
+
+
+def test_extract_pitch_unvoiced_audio():
+    """Verify unvoiced noise audio safely returns finite values without NaN/Inf."""
+    sr = 16_000
+    rng = np.random.RandomState(42)
+    noise = rng.normal(0, 0.01, sr * 1).astype(np.float32)
+
+    pitch_features = extract_pitch_features(noise, sample_rate=sr)
+
+    assert isinstance(pitch_features, np.ndarray)
+    assert pitch_features.shape == (4,)
+    assert pitch_features.dtype == np.float32
+    assert np.all(np.isfinite(pitch_features))
+
+
+def test_extract_pitch_from_preprocessed_audio(synthetic_wav_file: Path):
+    """Verify pitch extraction accepts PreprocessedAudio container."""
+    preprocessed = preprocess_audio(synthetic_wav_file)
+
+    pitch_features = extract_pitch_features(preprocessed)
+
+    assert isinstance(pitch_features, np.ndarray)
+    assert pitch_features.shape == (4,)
+    assert pitch_features.dtype == np.float32
+    assert np.all(np.isfinite(pitch_features))
+
+
+def test_extract_pitch_from_audio_recording(synthetic_wav_file: Path):
+    """Verify pitch extraction accepts AudioRecording container."""
+    recording = load_wav_file(synthetic_wav_file)
+
+    pitch_features = extract_pitch_features(recording)
+
+    assert isinstance(pitch_features, np.ndarray)
+    assert pitch_features.shape == (4,)
+    assert pitch_features.dtype == np.float32
+    assert np.all(np.isfinite(pitch_features))
+
+
+def test_extract_pitch_invalid_inputs():
+    """Verify safe validation against empty, non-finite, multi-dimensional, and invalid bounds."""
+    # Empty audio
+    with pytest.raises(AudioDataError, match="empty"):
+        extract_pitch_features(np.array([], dtype=np.float32))
+
+    # Non-finite values
+    with pytest.raises(AudioDataError, match="non-finite"):
+        extract_pitch_features(np.array([0.1, np.nan], dtype=np.float32))
+
+    # 2D stereo array
+    with pytest.raises(AudioDataError, match="1D"):
+        extract_pitch_features(np.zeros((16000, 2), dtype=np.float32))
+
+    # Invalid sample rate
+    with pytest.raises(AudioSampleRateError, match="positive"):
+        extract_pitch_features(np.ones(1000, dtype=np.float32), sample_rate=0)
+
+    # Invalid pitch frequency bounds
+    with pytest.raises(ValueError, match="Invalid pitch bounds"):
+        extract_pitch_features(np.ones(1000, dtype=np.float32), fmin=-10.0, fmax=500.0)
+
+    with pytest.raises(ValueError, match="Invalid pitch bounds"):
+        extract_pitch_features(np.ones(1000, dtype=np.float32), fmin=500.0, fmax=100.0)
+
+    # Unsupported type
+    with pytest.raises(TypeError, match="Unsupported audio input type"):
+        extract_pitch_features(12345)  # type: ignore
+
+
+def test_get_pitch_feature_names():
+    """Verify pitch feature names list."""
+    names = get_pitch_feature_names()
+    assert names == ["pitch_mean", "pitch_std", "pitch_min", "pitch_max"]
+    assert len(names) == 4
+
+
+def test_extract_pitch_dict():
+    """Verify extract_pitch_dict produces clear dictionary mapping."""
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 300 * t) * 0.7).astype(np.float32)
+
+    feat_dict = extract_pitch_dict(audio, sample_rate=sr)
+
+    assert isinstance(feat_dict, dict)
+    assert set(feat_dict.keys()) == {"pitch_mean", "pitch_std", "pitch_min", "pitch_max"}
+    for k, v in feat_dict.items():
+        assert isinstance(k, str)
+        assert isinstance(v, float)
+        assert np.isfinite(v)
+
+
+def test_compute_pitch_frames():
+    """Verify compute_pitch_frames returns f0 track, voiced flags, and voicing probabilities."""
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 250 * t) * 0.8).astype(np.float32)
+
+    f0, voiced_flag, voiced_probs = compute_pitch_frames(audio, sample_rate=sr)
+
+    assert isinstance(f0, np.ndarray)
+    assert isinstance(voiced_flag, np.ndarray)
+    assert isinstance(voiced_probs, np.ndarray)
+    assert f0.ndim == 1
+    assert voiced_flag.dtype == bool
+    assert len(f0) == len(voiced_flag) == len(voiced_probs)
+
+
+def test_voice_feature_extractor_pitch_methods():
+    """Verify VoiceFeatureExtractor exposes pitch extraction methods."""
+    extractor = VoiceFeatureExtractor()
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    audio = (np.sin(2 * np.pi * 350 * t) * 0.6).astype(np.float32)
+
+    # Pitch vector
+    pitch_vec = extractor.extract_pitch(audio, sample_rate=sr)
+    assert pitch_vec.shape == (4,)
+    assert pitch_vec.dtype == np.float32
+
+    # Pitch dict
+    pitch_dict = extractor.extract_pitch_dict(audio, sample_rate=sr)
+    assert len(pitch_dict) == 4
+
+    # Pitch frames
+    f0, vf, vp = extractor.compute_pitch_frames(audio, sample_rate=sr)
+    assert len(f0) > 0
+
+    # Pitch names
+    names = extractor.get_pitch_feature_names()
+    assert names == ["pitch_mean", "pitch_std", "pitch_min", "pitch_max"]
+
+
+def test_mfcc_behavior_unmodified():
+    """Verify MFCC feature extraction behavior and output remain completely unchanged."""
+    sr = 16_000
+    t = np.linspace(0, 3.0, sr * 3, endpoint=False)
+    audio = (np.sin(2 * np.pi * 440 * t) * 0.8).astype(np.float32)
+
+    mfcc_feats = extract_mfcc_features(audio, sample_rate=sr)
+    assert mfcc_feats.shape == (26,)
+    assert mfcc_feats.dtype == np.float32
+    assert np.all(np.isfinite(mfcc_feats))
+
 
 
 

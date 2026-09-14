@@ -1,23 +1,24 @@
 """
-Voice Modality — Acoustic Feature Extraction: MFCC Extraction
+Voice Modality — Acoustic Feature Extraction: MFCC & Pitch Extraction
 
-Extracts Mel-Frequency Cepstral Coefficients (MFCCs) from preprocessed
-16 kHz mono audio signals for stress and risk classification models.
+Extracts acoustic feature representations from preprocessed 16 kHz mono
+audio signals for stress and risk classification models.
 
-Features:
-    - Configurable number of coefficients (default: 13, per FeatureConfig)
-    - Frame-level STFT/Mel-spectrogram analysis via librosa
-    - Fixed-length feature representation using summary statistics (mean, std)
-    - Reusable controller (VoiceFeatureExtractor) and functional API
-    - Robust input validation and edge-case handling
+Features Implemented:
+    - Mel-Frequency Cepstral Coefficients (MFCCs): Configurable (default 13),
+      aggregated using mean and standard deviation per coefficient (fixed-length 26D).
+    - Fundamental Frequency / Pitch (F0): Computed via librosa.pyin with
+      mean, standard deviation, minimum, and maximum extracted from valid voiced frames
+      only (fixed-length 4D).
+    - Robust unvoiced/silent audio handling without NaN or Inf values.
+    - Reusable controller (VoiceFeatureExtractor) and functional APIs.
 
 Specifications adhere to:
     - Centralized config: src/ai_model/voice/config.py (FeatureConfig, AudioConfig)
     - Input: 16 kHz, mono, 1D float32 waveform (or PreprocessedAudio/AudioRecording)
-    - Output: Fixed-length 1D float32 numpy vector of size 2 * n_mfcc (26 features for 13 MFCCs)
 
 Note:
-    - Pitch, energy, spectral features, and ML modeling are deferred to subsequent commits.
+    - Energy, spectral features, and ML modeling are deferred to subsequent commits.
 """
 
 from dataclasses import dataclass, field
@@ -52,8 +53,16 @@ class FeatureExtractionError(AudioError):
 
 
 # ===========================================================================
-# Feature Names Helper
+# Feature Names Helpers & Constants
 # ===========================================================================
+
+PITCH_FEATURE_NAMES: Tuple[str, ...] = (
+    "pitch_mean",
+    "pitch_std",
+    "pitch_min",
+    "pitch_max",
+)
+
 
 def get_mfcc_feature_names(
     n_mfcc: int = FEATURE_CONFIG.n_mfcc,
@@ -79,6 +88,16 @@ def get_mfcc_feature_names(
             feature_names.append(f"mfcc_{i}_{stat}")
 
     return feature_names
+
+
+def get_pitch_feature_names() -> List[str]:
+    """
+    Generate standard feature column names for aggregated pitch (F0) vectors.
+
+    Returns:
+        List of pitch feature names: ['pitch_mean', 'pitch_std', 'pitch_min', 'pitch_max'].
+    """
+    return list(PITCH_FEATURE_NAMES)
 
 
 # ===========================================================================
@@ -257,6 +276,199 @@ def extract_mfcc_dict(
 
 
 # ===========================================================================
+# Frame-Level Pitch (F0) Extraction
+# ===========================================================================
+
+def compute_pitch_frames(
+    audio_data: np.ndarray,
+    sample_rate: int = AUDIO_CONFIG.target_sample_rate,
+    config: FeatureConfig = FEATURE_CONFIG,
+    fmin: Optional[float] = None,
+    fmax: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute frame-level fundamental frequency (F0) track using librosa.pyin.
+
+    Parameters:
+        audio_data: 1D numpy array of mono audio waveform.
+        sample_rate: Audio sampling frequency in Hz (default: 16,000 Hz).
+        config: FeatureConfig containing pitch frequency bounds.
+        fmin: Minimum fundamental frequency in Hz (default: config.pitch_fmin = 50.0).
+        fmax: Maximum fundamental frequency in Hz (default: config.pitch_fmax = 500.0).
+
+    Returns:
+        Tuple of (f0, voiced_flag, voiced_probabilities):
+            - f0: 1D numpy array of fundamental frequencies in Hz (unvoiced frames are NaN).
+            - voiced_flag: 1D boolean array indicating voiced frames.
+            - voiced_probabilities: 1D numpy array of voicing probability per frame.
+
+    Raises:
+        AudioDataError: If audio_data is empty, not 1D, or contains non-finite values.
+        AudioSampleRateError: If sample_rate <= 0.
+        ValueError: If fmin <= 0 or fmax <= fmin.
+    """
+    # 1. Validate audio array
+    if audio_data is None or audio_data.size == 0:
+        raise AudioDataError("Cannot extract pitch features from empty audio array.")
+
+    if not np.all(np.isfinite(audio_data)):
+        raise AudioDataError("Audio waveform contains non-finite values (NaN or Inf).")
+
+    if audio_data.ndim != 1:
+        raise AudioDataError(
+            f"Input audio must be a 1D mono waveform, got shape {audio_data.shape}."
+        )
+
+    # 2. Validate sample rate
+    if sample_rate <= 0:
+        raise AudioSampleRateError(f"Sample rate must be positive, got {sample_rate}.")
+
+    # 3. Validate pitch frequency bounds
+    min_f = float(fmin if fmin is not None else config.pitch_fmin)
+    max_f = float(fmax if fmax is not None else config.pitch_fmax)
+    if min_f <= 0.0 or max_f <= min_f:
+        raise ValueError(
+            f"Invalid pitch bounds: fmin={min_f}, fmax={max_f}. Must satisfy 0 < fmin < fmax."
+        )
+
+    y = np.asarray(audio_data, dtype=np.float32)
+
+    # Completely silent audio optimization: return empty/unvoiced frames directly
+    if np.max(np.abs(y)) == 0.0:
+        n_frames = max(1, int(np.ceil(len(y) / config.mfcc_hop_length)))
+        f0 = np.full(n_frames, np.nan, dtype=np.float32)
+        voiced_flag = np.zeros(n_frames, dtype=bool)
+        voiced_probs = np.zeros(n_frames, dtype=np.float32)
+        return f0, voiced_flag, voiced_probs
+
+    # Probabilistic YIN fundamental frequency estimation
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore")
+        f0, voiced_flag, voiced_probs = librosa.pyin(
+            y=y,
+            fmin=min_f,
+            fmax=max_f,
+            sr=sample_rate,
+            hop_length=config.mfcc_hop_length,
+        )
+
+    return f0.astype(np.float32), voiced_flag.astype(bool), voiced_probs.astype(np.float32)
+
+
+# ===========================================================================
+# Fixed-Length Aggregated Pitch Feature Extraction
+# ===========================================================================
+
+def extract_pitch_features(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    fmin: Optional[float] = None,
+    fmax: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Extract fixed-length pitch features (mean, std, min, max) from valid voiced frames only.
+
+    - Uses librosa.pyin for accurate fundamental frequency (F0) estimation.
+    - Aggregates exclusively over voiced frames (where voicing is detected and F0 is finite).
+    - Safely handles unvoiced or silent audio by returning 0.0 for all statistics,
+      preventing NaN or Inf from propagating downstream.
+    - Returns a 1D float32 array of shape (4,) corresponding to:
+      [pitch_mean, pitch_std, pitch_min, pitch_max].
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio container, or AudioRecording container.
+        sample_rate: Audio sampling frequency in Hz (defaults to container rate or 16,000 Hz).
+        config: FeatureConfig containing pitch frequency thresholds.
+        fmin: Minimum fundamental frequency in Hz (default: config.pitch_fmin = 50.0).
+        fmax: Maximum fundamental frequency in Hz (default: config.pitch_fmax = 500.0).
+
+    Returns:
+        1D numpy array of shape (4,) with dtype float32: [mean, std, min, max].
+
+    Raises:
+        AudioDataError: If audio is empty, non-finite, or not 1D mono.
+        AudioSampleRateError: If sample rate <= 0.
+        ValueError: If fmin <= 0 or fmax <= fmin.
+        TypeError: If audio is not a supported input type.
+    """
+    # Unpack audio and sample rate from input containers
+    if isinstance(audio, PreprocessedAudio):
+        audio_data = audio.audio_data
+        sr = sample_rate if sample_rate is not None else audio.sample_rate
+    elif isinstance(audio, AudioRecording):
+        audio_data = audio.audio_data
+        sr = sample_rate if sample_rate is not None else audio.sample_rate
+    elif isinstance(audio, np.ndarray):
+        audio_data = audio
+        sr = sample_rate if sample_rate is not None else AUDIO_CONFIG.target_sample_rate
+    else:
+        raise TypeError(
+            f"Unsupported audio input type: {type(audio)}. "
+            "Expected np.ndarray, PreprocessedAudio, or AudioRecording."
+        )
+
+    f0, voiced_flag, _ = compute_pitch_frames(
+        audio_data=audio_data,
+        sample_rate=sr,
+        config=config,
+        fmin=fmin,
+        fmax=fmax,
+    )
+
+    # Filter strictly for valid voiced frames
+    valid_f0 = f0[voiced_flag & np.isfinite(f0)]
+
+    # Handle unvoiced or silent audio safely without NaN/Inf
+    if len(valid_f0) == 0:
+        return np.zeros(4, dtype=np.float32)
+
+    pitch_mean = float(np.mean(valid_f0))
+    pitch_std = float(np.std(valid_f0))
+    pitch_min = float(np.min(valid_f0))
+    pitch_max = float(np.max(valid_f0))
+
+    return np.array([pitch_mean, pitch_std, pitch_min, pitch_max], dtype=np.float32)
+
+
+# Alias for concise API usage
+extract_pitch = extract_pitch_features
+
+
+def extract_pitch_dict(
+    audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+    sample_rate: Optional[int] = None,
+    config: FeatureConfig = FEATURE_CONFIG,
+    fmin: Optional[float] = None,
+    fmax: Optional[float] = None,
+) -> Dict[str, float]:
+    """
+    Extract fixed-length pitch features and return them as a dictionary of named features.
+
+    Parameters:
+        audio: 1D numpy array, PreprocessedAudio, or AudioRecording.
+        sample_rate: Audio sampling frequency in Hz.
+        config: FeatureConfig settings.
+        fmin: Minimum fundamental frequency in Hz.
+        fmax: Maximum fundamental frequency in Hz.
+
+    Returns:
+        Dictionary mapping feature names ('pitch_mean', 'pitch_std', 'pitch_min', 'pitch_max')
+        to float values.
+    """
+    feature_vector = extract_pitch_features(
+        audio=audio,
+        sample_rate=sample_rate,
+        config=config,
+        fmin=fmin,
+        fmax=fmax,
+    )
+    names = get_pitch_feature_names()
+
+    return {name: float(val) for name, val in zip(names, feature_vector)}
+
+
+# ===========================================================================
 # Reusable Feature Extractor Controller
 # ===========================================================================
 
@@ -274,6 +486,8 @@ class VoiceFeatureExtractor:
     ):
         self.config = config
         self.audio_config = audio_config
+
+    # --- MFCC Methods ---
 
     def get_feature_names(self, n_mfcc: Optional[int] = None) -> List[str]:
         """Get list of feature names for the configured MFCC extraction."""
@@ -321,4 +535,59 @@ class VoiceFeatureExtractor:
             sample_rate=sample_rate,
             config=self.config,
             n_mfcc=n_mfcc,
+        )
+
+    # --- Pitch Methods ---
+
+    def get_pitch_feature_names(self) -> List[str]:
+        """Get list of pitch feature names."""
+        return get_pitch_feature_names()
+
+    def compute_pitch_frames(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: Optional[int] = None,
+        fmin: Optional[float] = None,
+        fmax: Optional[float] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute frame-level pitch track and voicing indicators."""
+        sr = sample_rate if sample_rate is not None else self.audio_config.target_sample_rate
+        return compute_pitch_frames(
+            audio_data=audio_data,
+            sample_rate=sr,
+            config=self.config,
+            fmin=fmin,
+            fmax=fmax,
+        )
+
+    def extract_pitch(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        fmin: Optional[float] = None,
+        fmax: Optional[float] = None,
+    ) -> np.ndarray:
+        """Extract fixed-length pitch feature vector."""
+        return extract_pitch_features(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            fmin=fmin,
+            fmax=fmax,
+        )
+
+    def extract_pitch_dict(
+        self,
+        audio: Union[np.ndarray, PreprocessedAudio, AudioRecording],
+        sample_rate: Optional[int] = None,
+        fmin: Optional[float] = None,
+        fmax: Optional[float] = None,
+    ) -> Dict[str, float]:
+        """Extract fixed-length pitch features as a named dictionary."""
+        return extract_pitch_dict(
+            audio=audio,
+            sample_rate=sample_rate,
+            config=self.config,
+            fmin=fmin,
+            fmax=fmax,
         )
