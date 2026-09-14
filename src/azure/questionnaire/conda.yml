@@ -5,8 +5,8 @@ dependencies:
   - python=3.11
   - pip
   - pip:
-      - pandas
-      - numpy
-      - scikit-learn
-      - joblib
-      - matplotlib
+      - pandas==2.3.3
+      - numpy==2.4.2
+      - scikit-learn==1.8.0
+      - joblib==1.5.3
+      - matplotlib==3.10.8
