@@ -1,18 +1,22 @@
 """
-Voice Modality — Baseline Classification Model: Logistic Regression
+Voice Modality — Machine Learning Models: Logistic Regression & Random Forest
 
-Implements classical machine learning baseline models for voice-derived
+Implements classical machine learning baseline and tree-ensemble models for voice-derived
 stress/risk assessment using fixed-length acoustic feature representations (41D default).
 
 Components:
-    - VoiceLogisticRegression: Scikit-learn based Logistic Regression classifier
+    - BaseVoiceClassifier: Common base class providing feature/target separation,
+      rigorous input validation, standard interfaces, and probability utilities.
+    - VoiceLogisticRegression: Scikit-learn based Logistic Regression baseline classifier
       with standard feature scaling, configurable random_state and max_iter,
       and support for binary and multiclass target labels.
+    - VoiceRandomForest: Scikit-learn based Random Forest classifier with configurable
+      n_estimators, max_depth, min_samples_split, class_weight, and random_state.
     - separate_features_and_target: Utility function to decouple acoustic feature columns
       from metadata identifiers (participant_id) and target labels.
     - Input validation: Column integrity, numeric dtype checks, NaN/Inf checks,
       and sample count verification.
-    - Full fit / predict / predict_proba interface with class probability dictionaries.
+    - Full fit / predict / predict_proba / predict_proba_dict interface.
 
 Specifications adhere to:
     - Centralized config: src/ai_model/voice/config.py (ModelConfig, FeatureConfig)
@@ -20,9 +24,10 @@ Specifications adhere to:
     - No hardcoded target labels or dataset names.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.exceptions import NotFittedError
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -30,6 +35,10 @@ from sklearn.preprocessing import StandardScaler
 from .config import MODEL_CONFIG, ModelConfig
 from .features import COMBINED_FEATURE_NAMES
 from .recording import AudioError
+
+
+# Generic type for subclass method chaining
+T = TypeVar("T", bound="BaseVoiceClassifier")
 
 
 # ===========================================================================
@@ -112,66 +121,42 @@ def separate_features_and_target(
 
 
 # ===========================================================================
-# Voice Logistic Regression Classifier
+# Base Voice Classifier
 # ===========================================================================
 
-class VoiceLogisticRegression:
+class BaseVoiceClassifier:
     """
-    Baseline Logistic Regression classifier for voice modality stress/risk assessment.
+    Common base class for voice modality machine learning classifiers.
 
-    Features:
-        - Scikit-learn LogisticRegression with configurable random_state and max_iter.
-        - Integrated StandardScaler for acoustic features.
-        - Strict validation of input types, feature names, and non-null values.
-        - Dynamic support for arbitrary user target labels (binary, multiclass, string, int).
-        - Predict class labels and calibrated class probability distributions.
+    Provides:
+        - Common initialization and configuration handling
+        - Rigorous validation of input matrices, feature columns, and target labels
+        - Feature matrix standardization via optional StandardScaler
+        - Unified fit, predict, predict_proba, and predict_proba_dict interfaces
     """
 
     def __init__(
         self,
-        random_state: Optional[int] = MODEL_CONFIG.random_seed,
-        max_iter: int = 1000,
-        C: float = 1.0,
-        scale_features: bool = True,
-        solver: str = "lbfgs",
-        class_weight: Optional[Union[str, Dict[Any, float]]] = None,
+        scale_features: bool = False,
         config: ModelConfig = MODEL_CONFIG,
         expected_feature_names: Optional[List[str]] = None,
     ):
         """
-        Initialize VoiceLogisticRegression baseline model.
+        Initialize BaseVoiceClassifier.
 
         Parameters:
-            random_state: Random seed for solver reproducibility (default: 42).
-            max_iter: Maximum iterations for solver convergence (default: 1000).
-            C: Inverse regularization strength (default: 1.0).
-            scale_features: Whether to apply StandardScaler to features before classification (default: True).
-            solver: Optimization algorithm (default: 'lbfgs').
-            class_weight: Weights associated with classes ('balanced' or dict).
+            scale_features: Whether to scale features using StandardScaler (default: False).
             config: Centralized ModelConfig settings.
-            expected_feature_names: Optional list of expected feature names. If None,
-                                   learned during fit() or defaults to COMBINED_FEATURE_NAMES.
+            expected_feature_names: Optional explicit feature names expected during fit/predict.
         """
-        self.random_state = random_state
-        self.max_iter = max_iter
-        self.C = C
         self.scale_features = scale_features
-        self.solver = solver
-        self.class_weight = class_weight
         self.config = config
         self.expected_feature_names = (
             list(expected_feature_names) if expected_feature_names is not None else None
         )
 
-        # Internal estimators and attributes
         self.scaler_: Optional[StandardScaler] = StandardScaler() if scale_features else None
-        self.classifier_: LogisticRegression = LogisticRegression(
-            random_state=self.random_state,
-            max_iter=self.max_iter,
-            C=self.C,
-            solver=self.solver,
-            class_weight=self.class_weight,
-        )
+        self.classifier_: Any = None
         self.feature_names_: Optional[List[str]] = None
         self.classes_: Optional[np.ndarray] = None
         self.n_features_in_: Optional[int] = None
@@ -182,23 +167,11 @@ class VoiceLogisticRegression:
         """Check if the classifier has been fitted."""
         return self.is_fitted_
 
-    @property
-    def coef_(self) -> np.ndarray:
-        """Coefficients of the features in the decision function."""
-        self._check_is_fitted()
-        return self.classifier_.coef_
-
-    @property
-    def intercept_(self) -> np.ndarray:
-        """Intercept (bias) added to the decision function."""
-        self._check_is_fitted()
-        return self.classifier_.intercept_
-
     def _check_is_fitted(self) -> None:
         """Verify that the model has been fitted."""
-        if not self.is_fitted_ or self.classes_ is None:
+        if not self.is_fitted_ or self.classes_ is None or self.classifier_ is None:
             raise ModelNotFittedError(
-                "This VoiceLogisticRegression instance is not fitted yet. "
+                f"This {self.__class__.__name__} instance is not fitted yet. "
                 "Call 'fit' with training data before using 'predict' or 'predict_proba'."
             )
 
@@ -351,14 +324,14 @@ class VoiceLogisticRegression:
         return arr_y
 
     def fit(
-        self,
+        self: T,
         X: Union[pd.DataFrame, np.ndarray],
         y: Optional[Union[pd.Series, np.ndarray, list]] = None,
         target_column: Optional[str] = None,
         id_column: Optional[str] = MODEL_CONFIG.participant_id_column,
-    ) -> "VoiceLogisticRegression":
+    ) -> T:
         """
-        Fit the baseline Logistic Regression model and feature scaler.
+        Fit the classifier and optional feature scaler.
 
         Supports two usage styles:
             1. Separated features and labels: fit(X, y)
@@ -371,7 +344,7 @@ class VoiceLogisticRegression:
             id_column: Participant ID column to exclude if X is a combined DataFrame.
 
         Returns:
-            self: The fitted VoiceLogisticRegression instance.
+            self: The fitted classifier instance.
         """
         # If y is None and X is a DataFrame, attempt to separate target
         if y is None and isinstance(X, pd.DataFrame):
@@ -395,13 +368,13 @@ class VoiceLogisticRegression:
         # Fit feature scaler if enabled
         if self.scale_features:
             self.scaler_ = StandardScaler()
-            X_scaled = self.scaler_.fit_transform(X_arr)
+            X_proc = self.scaler_.fit_transform(X_arr)
         else:
             self.scaler_ = None
-            X_scaled = X_arr
+            X_proc = X_arr
 
-        # Fit scikit-learn Logistic Regression
-        self.classifier_.fit(X_scaled, y_arr)
+        # Fit scikit-learn estimator
+        self.classifier_.fit(X_proc, y_arr)
 
         self.classes_ = self.classifier_.classes_
         self.is_fitted_ = True
@@ -425,11 +398,11 @@ class VoiceLogisticRegression:
         X_arr = self._validate_features(X, is_fit=False)
 
         if self.scale_features and self.scaler_ is not None:
-            X_scaled = self.scaler_.transform(X_arr)
+            X_proc = self.scaler_.transform(X_arr)
         else:
-            X_scaled = X_arr
+            X_proc = X_arr
 
-        preds = self.classifier_.predict(X_scaled)
+        preds = self.classifier_.predict(X_proc)
         return preds
 
     def predict_proba(
@@ -449,11 +422,11 @@ class VoiceLogisticRegression:
         X_arr = self._validate_features(X, is_fit=False)
 
         if self.scale_features and self.scaler_ is not None:
-            X_scaled = self.scaler_.transform(X_arr)
+            X_proc = self.scaler_.transform(X_arr)
         else:
-            X_scaled = X_arr
+            X_proc = X_arr
 
-        proba = self.classifier_.predict_proba(X_scaled)
+        proba = self.classifier_.predict_proba(X_proc)
         return proba
 
     def predict_proba_dict(
@@ -479,6 +452,162 @@ class VoiceLogisticRegression:
         return results
 
 
+# ===========================================================================
+# Voice Logistic Regression Classifier
+# ===========================================================================
+
+class VoiceLogisticRegression(BaseVoiceClassifier):
+    """
+    Baseline Logistic Regression classifier for voice modality stress/risk assessment.
+
+    Features:
+        - Scikit-learn LogisticRegression with configurable random_state and max_iter.
+        - Integrated StandardScaler for acoustic features (default: True).
+        - Strict validation of input types, feature names, and non-null values.
+        - Dynamic support for arbitrary user target labels (binary, multiclass, string, int).
+        - Predict class labels and calibrated class probability distributions.
+    """
+
+    def __init__(
+        self,
+        random_state: Optional[int] = MODEL_CONFIG.random_seed,
+        max_iter: int = 1000,
+        C: float = 1.0,
+        scale_features: bool = True,
+        solver: str = "lbfgs",
+        class_weight: Optional[Union[str, Dict[Any, float]]] = None,
+        config: ModelConfig = MODEL_CONFIG,
+        expected_feature_names: Optional[List[str]] = None,
+    ):
+        """
+        Initialize VoiceLogisticRegression baseline model.
+
+        Parameters:
+            random_state: Random seed for solver reproducibility (default: 42).
+            max_iter: Maximum iterations for solver convergence (default: 1000).
+            C: Inverse regularization strength (default: 1.0).
+            scale_features: Whether to apply StandardScaler to features before classification (default: True).
+            solver: Optimization algorithm (default: 'lbfgs').
+            class_weight: Weights associated with classes ('balanced' or dict).
+            config: Centralized ModelConfig settings.
+            expected_feature_names: Optional list of expected feature names. If None,
+                                   learned during fit() or defaults to COMBINED_FEATURE_NAMES.
+        """
+        super().__init__(
+            scale_features=scale_features,
+            config=config,
+            expected_feature_names=expected_feature_names,
+        )
+        self.random_state = random_state
+        self.max_iter = max_iter
+        self.C = C
+        self.solver = solver
+        self.class_weight = class_weight
+
+        # Internal estimator
+        self.classifier_: LogisticRegression = LogisticRegression(
+            random_state=self.random_state,
+            max_iter=self.max_iter,
+            C=self.C,
+            solver=self.solver,
+            class_weight=self.class_weight,
+        )
+
+    @property
+    def coef_(self) -> np.ndarray:
+        """Coefficients of the features in the decision function."""
+        self._check_is_fitted()
+        return self.classifier_.coef_
+
+    @property
+    def intercept_(self) -> np.ndarray:
+        """Intercept (bias) added to the decision function."""
+        self._check_is_fitted()
+        return self.classifier_.intercept_
+
+
+# ===========================================================================
+# Voice Random Forest Classifier
+# ===========================================================================
+
+class VoiceRandomForest(BaseVoiceClassifier):
+    """
+    Random Forest classifier for voice modality stress/risk assessment.
+
+    Features:
+        - Scikit-learn RandomForestClassifier with configurable hyperparameters:
+          n_estimators, max_depth, min_samples_split, class_weight, random_state.
+        - Reuses existing feature/target separation and input validation.
+        - Provides fit, predict, predict_proba, and predict_proba_dict methods.
+        - Supports binary and multiclass arbitrary labels dynamically.
+        - Exposes feature_importances_ and feature_importances_dict for interpretability.
+        - Optional feature scaling (defaults to False for tree ensembles).
+    """
+
+    def __init__(
+        self,
+        n_estimators: int = 100,
+        max_depth: Optional[int] = None,
+        min_samples_split: Union[int, float] = 2,
+        class_weight: Optional[Union[str, Dict[Any, float]]] = None,
+        random_state: Optional[int] = MODEL_CONFIG.random_seed,
+        scale_features: bool = False,
+        config: ModelConfig = MODEL_CONFIG,
+        expected_feature_names: Optional[List[str]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Initialize VoiceRandomForest classifier.
+
+        Parameters:
+            n_estimators: Number of trees in the forest (default: 100).
+            max_depth: Maximum depth of the tree (default: None).
+            min_samples_split: Minimum number of samples required to split an internal node (default: 2).
+            class_weight: Weights associated with classes ('balanced', 'balanced_subsample', or dict).
+            random_state: Random seed for reproducibility (default: 42).
+            scale_features: Whether to apply StandardScaler (default: False).
+            config: Centralized ModelConfig settings.
+            expected_feature_names: Optional list of expected feature names.
+            **kwargs: Additional keyword arguments passed to sklearn RandomForestClassifier.
+        """
+        super().__init__(
+            scale_features=scale_features,
+            config=config,
+            expected_feature_names=expected_feature_names,
+        )
+        self.n_estimators = n_estimators
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.class_weight = class_weight
+        self.random_state = random_state
+        self.kwargs = kwargs
+
+        # Internal estimator
+        self.classifier_: RandomForestClassifier = RandomForestClassifier(
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,
+            min_samples_split=self.min_samples_split,
+            class_weight=self.class_weight,
+            random_state=self.random_state,
+            **self.kwargs,
+        )
+
+    @property
+    def feature_importances_(self) -> np.ndarray:
+        """Feature importances from the fitted Random Forest classifier."""
+        self._check_is_fitted()
+        return self.classifier_.feature_importances_
+
+    @property
+    def feature_importances_dict(self) -> Dict[str, float]:
+        """Map feature names to their corresponding importance scores."""
+        self._check_is_fitted()
+        importances = self.classifier_.feature_importances_
+        names = self.feature_names_ or [f"feature_{i}" for i in range(len(importances))]
+        return {name: float(imp) for name, imp in zip(names, importances)}
+
+
 # Aliases for classifier naming flexibility
 VoiceBaselineClassifier = VoiceLogisticRegression
 VoiceLogisticRegressionClassifier = VoiceLogisticRegression
+VoiceRandomForestClassifier = VoiceRandomForest

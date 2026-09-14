@@ -114,12 +114,15 @@ from src.ai_model.voice.dataset import (
     save_voice_dataset,
 )
 from src.ai_model.voice.model import (
+    BaseVoiceClassifier,
     ModelError,
     ModelInputError,
     ModelNotFittedError,
     VoiceBaselineClassifier,
     VoiceLogisticRegression,
     VoiceLogisticRegressionClassifier,
+    VoiceRandomForest,
+    VoiceRandomForestClassifier,
     separate_features_and_target,
 )
 
@@ -2631,6 +2634,301 @@ def test_voice_model_aliases():
     """Verify class aliases match VoiceLogisticRegression."""
     assert VoiceBaselineClassifier is VoiceLogisticRegression
     assert VoiceLogisticRegressionClassifier is VoiceLogisticRegression
+
+
+# ===========================================================================
+# Random Forest Model Tests (Commit 15)
+# ===========================================================================
+
+def test_random_forest_fit_and_predict_binary():
+    """Verify VoiceRandomForest fits on binary labels and produces valid predictions and probabilities."""
+    df = _create_synthetic_feature_df(n_samples=24, target_classes=("low_risk", "high_risk"), random_seed=42)
+    clf = VoiceRandomForest(n_estimators=25, random_state=42)
+
+    assert not clf.is_fitted
+    clf.fit(df)
+    assert clf.is_fitted
+    assert set(clf.classes_) == {"high_risk", "low_risk"}
+    assert clf.n_features_in_ == len(COMBINED_FEATURE_NAMES)
+
+    # Predict class labels
+    preds = clf.predict(df)
+    assert isinstance(preds, np.ndarray)
+    assert preds.shape == (24,)
+    for p in preds:
+        assert p in {"high_risk", "low_risk"}
+
+    # Predict class probabilities
+    proba = clf.predict_proba(df)
+    assert isinstance(proba, np.ndarray)
+    assert proba.shape == (24, 2)
+    assert np.all(proba >= 0.0)
+    assert np.all(proba <= 1.0)
+    assert np.allclose(proba.sum(axis=1), 1.0)
+
+    # Predict proba dict
+    proba_dicts = clf.predict_proba_dict(df)
+    assert len(proba_dicts) == 24
+    for item in proba_dicts:
+        assert set(item.keys()) == {"high_risk", "low_risk"}
+        assert np.isclose(sum(item.values()), 1.0)
+
+
+def test_random_forest_multiclass_arbitrary_labels():
+    """Verify VoiceRandomForest supports multiclass classification with arbitrary string or numeric labels."""
+    # 3 string classes
+    df_multi = _create_synthetic_feature_df(
+        n_samples=30,
+        target_classes=("mild", "moderate", "severe"),
+        random_seed=42,
+    )
+    clf = VoiceRandomForest(n_estimators=20, random_state=42)
+    clf.fit(df_multi)
+
+    assert clf.is_fitted
+    assert len(clf.classes_) == 3
+    assert set(clf.classes_) == {"mild", "moderate", "severe"}
+
+    preds = clf.predict(df_multi)
+    assert len(preds) == 30
+    assert set(np.unique(preds)).issubset({"mild", "moderate", "severe"})
+
+    proba = clf.predict_proba(df_multi)
+    assert proba.shape == (30, 3)
+    assert np.allclose(proba.sum(axis=1), 1.0)
+
+    # Integer labels (-1, 0, 1)
+    df_int = _create_synthetic_feature_df(
+        n_samples=21,
+        target_classes=(-1, 0, 1),
+        random_seed=101,
+    )
+    clf_int = VoiceRandomForest(n_estimators=15, random_state=42)
+    clf_int.fit(df_int)
+    assert set(clf_int.classes_) == {-1, 0, 1}
+    preds_int = clf_int.predict(df_int)
+    assert set(np.unique(preds_int)).issubset({-1, 0, 1})
+
+
+def test_random_forest_configurable_hyperparameters():
+    """Verify VoiceRandomForest honors configurable hyperparameters and produces deterministic output."""
+    clf1 = VoiceRandomForest(
+        n_estimators=15,
+        max_depth=3,
+        min_samples_split=4,
+        class_weight="balanced",
+        random_state=77,
+    )
+    assert clf1.n_estimators == 15
+    assert clf1.max_depth == 3
+    assert clf1.min_samples_split == 4
+    assert clf1.class_weight == "balanced"
+    assert clf1.random_state == 77
+    assert clf1.classifier_.n_estimators == 15
+    assert clf1.classifier_.max_depth == 3
+    assert clf1.classifier_.min_samples_split == 4
+    assert clf1.classifier_.class_weight == "balanced"
+
+    df = _create_synthetic_feature_df(n_samples=20, random_seed=42)
+    X, y = separate_features_and_target(df)
+
+    clf1.fit(X, y)
+
+    # Identical random_state produces identical predictions and feature importances
+    clf2 = VoiceRandomForest(
+        n_estimators=15,
+        max_depth=3,
+        min_samples_split=4,
+        class_weight="balanced",
+        random_state=77,
+    )
+    clf2.fit(X, y)
+
+    assert np.array_equal(clf1.predict(X), clf2.predict(X))
+    assert np.allclose(clf1.predict_proba(X), clf2.predict_proba(X))
+    assert np.allclose(clf1.feature_importances_, clf2.feature_importances_)
+
+
+def test_random_forest_unfitted_raises_error():
+    """Verify calling predict, predict_proba, or accessing feature importances before fit raises error."""
+    clf = VoiceRandomForest()
+    dummy_X = np.ones((5, 41), dtype=np.float32)
+
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        clf.predict(dummy_X)
+
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        clf.predict_proba(dummy_X)
+
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        clf.predict_proba_dict(dummy_X)
+
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        _ = clf.feature_importances_
+
+    with pytest.raises(ModelNotFittedError, match="not fitted yet"):
+        _ = clf.feature_importances_dict
+
+
+def test_random_forest_input_validation():
+    """Verify rigorous input validation across features, columns, and target."""
+    clf = VoiceRandomForest()
+
+    # Empty features
+    with pytest.raises(ModelInputError, match="empty"):
+        clf.fit(pd.DataFrame(), y=np.array([1, 2]))
+
+    # Target is None and X cannot be decoupled
+    with pytest.raises(ModelInputError, match="Target column 'target' not found"):
+        clf.fit(pd.DataFrame({"feat_1": [1.0, 2.0]}))
+
+    # Features contains NaN
+    df_nan = _create_synthetic_feature_df(n_samples=10)
+    df_nan.loc[2, "mfcc_1_mean"] = np.nan
+    with pytest.raises(ModelInputError, match="NaN"):
+        clf.fit(df_nan)
+
+    # Features contains non-numeric column
+    df_str = _create_synthetic_feature_df(n_samples=10)
+    df_str["bad_feature"] = ["str"] * 10
+    with pytest.raises(ModelInputError, match="non-numeric"):
+        clf.fit(df_str.drop(columns=["target"]), y=df_str["target"])
+
+    # Target contains null
+    df_valid = _create_synthetic_feature_df(n_samples=10)
+    X, y = separate_features_and_target(df_valid)
+    y_null = y.copy()
+    y_null.iloc[1] = None
+    with pytest.raises(ModelInputError, match="null/NaN"):
+        clf.fit(X, y_null)
+
+    # Target with only 1 unique class
+    y_single = ["class_a"] * 10
+    with pytest.raises(ModelInputError, match="at least 2 distinct classes"):
+        clf.fit(X, y_single)
+
+    # Mismatched sample counts
+    with pytest.raises(ModelInputError, match="Sample count mismatch"):
+        clf.fit(X, y.iloc[:5])
+
+    # Missing expected feature columns during predict
+    clf.fit(X, y)
+    X_missing = X.drop(columns=["mfcc_1_mean"])
+    with pytest.raises(ModelInputError, match="missing fitted feature columns"):
+        clf.predict(X_missing)
+
+
+def test_random_forest_feature_importances():
+    """Verify feature_importances_ and feature_importances_dict properties."""
+    df = _create_synthetic_feature_df(n_samples=30, random_seed=42)
+    clf = VoiceRandomForest(n_estimators=30, random_state=42)
+    clf.fit(df)
+
+    importances = clf.feature_importances_
+    assert isinstance(importances, np.ndarray)
+    assert len(importances) == len(COMBINED_FEATURE_NAMES)
+    assert np.all(importances >= 0.0)
+    assert np.isclose(importances.sum(), 1.0)
+
+    imp_dict = clf.feature_importances_dict
+    assert isinstance(imp_dict, dict)
+    assert len(imp_dict) == len(COMBINED_FEATURE_NAMES)
+    for name in COMBINED_FEATURE_NAMES:
+        assert name in imp_dict
+        assert imp_dict[name] >= 0.0
+    assert np.isclose(sum(imp_dict.values()), 1.0)
+
+
+def test_random_forest_single_sample_prediction():
+    """Verify predicting on a single sample dictionary or 1D vector."""
+    df = _create_synthetic_feature_df(n_samples=16, random_seed=42)
+    clf = VoiceRandomForest(n_estimators=20, random_state=42)
+    clf.fit(df)
+
+    # Single-sample dict
+    single_dict = {col: float(df.loc[0, col]) for col in COMBINED_FEATURE_NAMES}
+    pred_dict = clf.predict(single_dict)
+    assert pred_dict.shape == (1,)
+    proba_dict = clf.predict_proba(single_dict)
+    assert proba_dict.shape == (1, 2)
+    assert np.allclose(proba_dict.sum(), 1.0)
+
+    # Single-sample 1D numpy vector
+    single_vec = np.array([single_dict[c] for c in COMBINED_FEATURE_NAMES], dtype=np.float32)
+    pred_vec = clf.predict(single_vec)
+    assert pred_vec.shape == (1,)
+    assert pred_vec[0] == pred_dict[0]
+
+
+def test_random_forest_feature_scaling_toggle():
+    """Verify scale_features=False (default) and scale_features=True operate properly."""
+    df = _create_synthetic_feature_df(n_samples=16)
+    X, y = separate_features_and_target(df)
+
+    # Unscaled (default for Random Forest)
+    clf_unscaled = VoiceRandomForest(scale_features=False, n_estimators=10, random_state=42)
+    clf_unscaled.fit(X, y)
+    assert clf_unscaled.scaler_ is None
+    assert clf_unscaled.is_fitted
+    preds = clf_unscaled.predict(X)
+    assert len(preds) == 16
+
+    # Scaled
+    clf_scaled = VoiceRandomForest(scale_features=True, n_estimators=10, random_state=42)
+    clf_scaled.fit(X, y)
+    assert clf_scaled.scaler_ is not None
+    assert clf_scaled.is_fitted
+    preds_scaled = clf_scaled.predict(X)
+    assert len(preds_scaled) == 16
+
+
+def test_random_forest_dataset_loader_integration(tmp_path: Path):
+    """End-to-end integration: load dataset via AudioDatasetLoader and fit VoiceRandomForest."""
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create 4 synthetic audio files
+    f1 = _generate_test_audio_file(audio_dir / "P001.wav", frequency=300.0)
+    f2 = _generate_test_audio_file(audio_dir / "P002.wav", frequency=350.0)
+    f3 = _generate_test_audio_file(audio_dir / "P003.wav", frequency=500.0)
+    f4 = _generate_test_audio_file(audio_dir / "P004.wav", frequency=550.0)
+
+    meta_df = pd.DataFrame([
+        {"filename": f1.name, "participant_id": "P001", "target": "calm"},
+        {"filename": f2.name, "participant_id": "P002", "target": "calm"},
+        {"filename": f3.name, "participant_id": "P003", "target": "stressed"},
+        {"filename": f4.name, "participant_id": "P004", "target": "stressed"},
+    ])
+    meta_path = tmp_path / "metadata.csv"
+    meta_df.to_csv(meta_path, index=False)
+
+    # 1. Load dataset with AudioDatasetLoader
+    dataset_df = load_voice_dataset(metadata=meta_path, audio_dir=audio_dir)
+    assert len(dataset_df) == 4
+    assert len(dataset_df.columns) == 43
+
+    # 2. Fit VoiceRandomForest directly on dataset_df
+    clf = VoiceRandomForest(n_estimators=15, random_state=42)
+    clf.fit(dataset_df)
+
+    assert clf.is_fitted
+    assert set(clf.classes_) == {"calm", "stressed"}
+
+    # 3. Predict on dataset_df
+    predictions = clf.predict(dataset_df)
+    assert len(predictions) == 4
+
+    probabilities = clf.predict_proba(dataset_df)
+    assert probabilities.shape == (4, 2)
+    assert np.allclose(probabilities.sum(axis=1), 1.0)
+
+
+def test_random_forest_aliases_and_inheritance():
+    """Verify class aliases and inheritance hierarchy."""
+    assert VoiceRandomForestClassifier is VoiceRandomForest
+    assert issubclass(VoiceRandomForest, BaseVoiceClassifier)
+    assert issubclass(VoiceLogisticRegression, BaseVoiceClassifier)
+
 
 
 

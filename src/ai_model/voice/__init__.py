@@ -121,12 +121,15 @@ from .dataset import (
     save_voice_dataset,
 )
 from .model import (
+    BaseVoiceClassifier,
     ModelError,
     ModelInputError,
     ModelNotFittedError,
     VoiceBaselineClassifier,
     VoiceLogisticRegression,
     VoiceLogisticRegressionClassifier,
+    VoiceRandomForest,
+    VoiceRandomForestClassifier,
     separate_features_and_target,
 )
 
