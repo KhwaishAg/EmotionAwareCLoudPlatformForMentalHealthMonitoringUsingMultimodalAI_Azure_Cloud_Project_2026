@@ -4,29 +4,33 @@ Voice Modality — Audio Preprocessing Pipeline
 Implements the modular, deterministic preprocessing pipeline for voice recordings:
     1. Audio Ingestion: Load from local file, in-memory bytes, or AudioRecording.
     2. Mono Conversion: Downmix multi-channel / stereo audio to single-channel mono.
-    3. Amplitude Normalization: Scale waveform peak to target peak (default 0.95).
-    4. Clean Waveform Output: Return PreprocessedAudio container ready for downstream stages.
+    3. 16 kHz Resampling: Polyphase resampling to 16,000 Hz if sample rate differs.
+    4. Amplitude Normalization: Scale waveform peak to target peak (default 0.95).
+    5. Clean Waveform Output: Return PreprocessedAudio container ready for downstream stages.
 
 Specifications adhere to:
     - Centralized config: src/ai_model/voice/config.py (AudioConfig)
     - Recording protocol: docs/audio_pipeline.md
+    - Target: WAV, mono, 16 kHz, ~30-60 seconds.
 
 Note:
-    - Sample rate is preserved as-is in this stage (resampling to 16 kHz is Commit 6).
     - Silence trimming is deferred to Commit 7.
     - Feature extraction and model inference are handled in subsequent modules.
 """
 
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
+import scipy.signal as signal
 
 from .config import AUDIO_CONFIG, AudioConfig
 from .recording import (
     AudioDataError,
     AudioRecording,
+    AudioSampleRateError,
     load_wav_bytes,
     load_wav_file,
 )
@@ -42,8 +46,8 @@ class PreprocessedAudio:
     Standardized clean waveform container produced by the preprocessing pipeline.
 
     Attributes:
-        audio_data: 1D numpy array of clean float32 mono audio waveform.
-        sample_rate: Audio sampling rate in Hz (preserved from input).
+        audio_data: 1D numpy array of clean float32 mono 16 kHz audio waveform.
+        sample_rate: Audio sampling rate in Hz (standardized to 16,000 Hz).
         channels: Number of channels (always 1 for mono).
         duration_seconds: Duration of the waveform in seconds.
         participant_id: Optional anonymous participant identifier (e.g., 'P001').
@@ -51,7 +55,7 @@ class PreprocessedAudio:
     """
 
     audio_data: np.ndarray
-    sample_rate: int
+    sample_rate: int = 16_000
     channels: int = 1
     duration_seconds: float = 0.0
     participant_id: Optional[str] = None
@@ -143,6 +147,70 @@ def convert_to_mono(audio_data: np.ndarray) -> np.ndarray:
         )
 
 
+def resample_audio(
+    audio_data: np.ndarray,
+    orig_sample_rate: int,
+    target_sample_rate: int = AUDIO_CONFIG.target_sample_rate,
+) -> Tuple[np.ndarray, bool]:
+    """
+    Resample a 1D audio waveform to target_sample_rate (default 16 kHz).
+
+    - Only resamples when orig_sample_rate != target_sample_rate.
+    - If orig_sample_rate == target_sample_rate, returns original waveform without resampling.
+    - Uses polyphase filtering (scipy.signal.resample_poly) with anti-aliasing filter
+      to preserve audio quality.
+    - Falls back to FFT-based sinc interpolation if polyphase factor is extreme.
+
+    Parameters:
+        audio_data: 1D numpy array of audio samples.
+        orig_sample_rate: Original sampling frequency in Hz.
+        target_sample_rate: Target sampling frequency in Hz (default: 16,000 Hz).
+
+    Returns:
+        Tuple of (resampled_1d_float32_array, was_resampled_boolean).
+
+    Raises:
+        AudioSampleRateError: If orig_sample_rate or target_sample_rate is non-positive.
+        AudioDataError: If audio_data is empty or contains non-finite values.
+    """
+    if orig_sample_rate <= 0:
+        raise AudioSampleRateError(
+            f"Original sample rate must be a positive integer > 0 (got {orig_sample_rate})."
+        )
+    if target_sample_rate <= 0:
+        raise AudioSampleRateError(
+            f"Target sample rate must be a positive integer > 0 (got {target_sample_rate})."
+        )
+
+    if audio_data is None or audio_data.size == 0:
+        raise AudioDataError("Cannot resample empty audio array.")
+
+    if not np.all(np.isfinite(audio_data)):
+        raise AudioDataError("Audio waveform contains non-finite values (NaN or Inf).")
+
+    # Fast passthrough: no resampling needed if rates match
+    if orig_sample_rate == target_sample_rate:
+        return audio_data.astype(np.float32, copy=True), False
+
+    # Ensure 1D
+    if audio_data.ndim != 1:
+        raise AudioDataError(f"resample_audio expects 1D array, got shape {audio_data.shape}.")
+
+    # Rational polyphase resampling
+    gcd = math.gcd(target_sample_rate, orig_sample_rate)
+    up = target_sample_rate // gcd
+    down = orig_sample_rate // gcd
+
+    try:
+        resampled = signal.resample_poly(audio_data, up, down).astype(np.float32)
+    except Exception:
+        # Fallback to FFT-based sinc interpolation
+        target_length = int(round(len(audio_data) * target_sample_rate / orig_sample_rate))
+        resampled = signal.resample(audio_data, target_length).astype(np.float32)
+
+    return resampled, True
+
+
 def normalize_amplitude(
     audio_data: np.ndarray,
     target_peak: float = 0.95,
@@ -199,11 +267,11 @@ def preprocess_audio(
         1. Ingest audio from AudioRecording, file path, or byte buffer.
         2. Validate audio structure and contents.
         3. Convert audio to mono (averaging channels if stereo/multichannel).
-        4. Normalize amplitude to target peak (config.normalization_peak = 0.95).
-        5. Return clean PreprocessedAudio container.
+        4. Resample audio to 16 kHz (config.target_sample_rate) if different.
+        5. Normalize amplitude to target peak (config.normalization_peak = 0.95).
+        6. Return clean PreprocessedAudio container ready for downstream stages.
 
     Note:
-        Sample rate is preserved as-is. Resampling is deferred to Commit 6.
         Silence trimming is deferred to Commit 7.
 
     Parameters:
@@ -212,7 +280,7 @@ def preprocess_audio(
         participant_id: Optional anonymous participant identifier to assign.
 
     Returns:
-        PreprocessedAudio container with clean mono waveform.
+        PreprocessedAudio container with clean mono 16 kHz waveform.
 
     Raises:
         AudioDataError: If audio is corrupt, empty, or contains non-finite values.
@@ -243,31 +311,40 @@ def preprocess_audio(
         raise AudioDataError("Audio contains non-finite values (NaN or Inf) and cannot be preprocessed.")
 
     original_channels = recording.channels
-    sample_rate = recording.sample_rate
+    orig_sample_rate = recording.sample_rate
 
     # 3. Convert to mono
     mono_waveform = convert_to_mono(recording.audio_data)
 
-    # 4. Amplitude normalization
-    normalized_waveform, orig_peak = normalize_amplitude(
+    # 4. Resample to 16 kHz if sample rate differs
+    resampled_waveform, was_resampled = resample_audio(
         mono_waveform,
+        orig_sample_rate=orig_sample_rate,
+        target_sample_rate=config.target_sample_rate,
+    )
+
+    # 5. Amplitude normalization
+    normalized_waveform, orig_peak = normalize_amplitude(
+        resampled_waveform,
         target_peak=config.normalization_peak,
     )
 
-    # 5. Metadata tracking
-    duration_seconds = len(normalized_waveform) / float(sample_rate)
+    # 6. Metadata tracking
+    duration_seconds = len(normalized_waveform) / float(config.target_sample_rate)
     metadata = {
         "original_channels": original_channels,
         "converted_to_mono": (original_channels != 1),
+        "original_sample_rate": orig_sample_rate,
+        "target_sample_rate": config.target_sample_rate,
+        "was_resampled": was_resampled,
         "original_peak": orig_peak,
         "normalized_peak": float(np.max(np.abs(normalized_waveform))) if len(normalized_waveform) > 0 else 0.0,
-        "sample_rate_preserved": sample_rate,
         "normalization_target_peak": config.normalization_peak,
     }
 
     return PreprocessedAudio(
         audio_data=normalized_waveform,
-        sample_rate=sample_rate,
+        sample_rate=config.target_sample_rate,
         channels=1,
         duration_seconds=duration_seconds,
         participant_id=pid,
@@ -293,6 +370,16 @@ class VoicePreprocessor:
     def to_mono(self, audio_data: np.ndarray) -> np.ndarray:
         """Convert audio waveform to mono."""
         return convert_to_mono(audio_data)
+
+    def resample(
+        self,
+        audio_data: np.ndarray,
+        orig_sample_rate: int,
+        target_sample_rate: Optional[int] = None,
+    ) -> Tuple[np.ndarray, bool]:
+        """Resample audio waveform to target sample rate (default 16 kHz)."""
+        target = target_sample_rate if target_sample_rate is not None else self.config.target_sample_rate
+        return resample_audio(audio_data, orig_sample_rate, target_sample_rate=target)
 
     def normalize(
         self,

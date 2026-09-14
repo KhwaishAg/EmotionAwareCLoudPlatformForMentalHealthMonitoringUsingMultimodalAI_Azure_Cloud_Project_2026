@@ -61,4 +61,6 @@ from .preprocessing import (
     convert_to_mono,
     normalize_amplitude,
     preprocess_audio,
+    resample_audio,
 )
+

@@ -54,7 +54,9 @@ from src.ai_model.voice.preprocessing import (
     convert_to_mono,
     normalize_amplitude,
     preprocess_audio,
+    resample_audio,
 )
+
 
 
 
@@ -642,10 +644,10 @@ def test_preprocess_audio_pipeline_from_file(synthetic_wav_file: Path):
     assert preprocessed.metadata["normalization_target_peak"] == 0.95
 
 
-def test_preprocess_audio_preserves_sample_rate_and_downmixes_stereo():
+def test_preprocess_audio_downmixes_stereo_and_resamples_44k_to_16k():
     """
-    Verify pipeline converts stereo to mono and preserves input sample rate
-    (e.g., 44.1 kHz is preserved, resampling is Commit 6).
+    Verify pipeline converts stereo to mono and resamples 44.1 kHz input
+    to the target 16 kHz standard.
     """
     sr = 44_100
     duration = 5.0
@@ -657,16 +659,22 @@ def test_preprocess_audio_preserves_sample_rate_and_downmixes_stereo():
 
     preprocessed = preprocess_audio(stereo_bytes, participant_id="P099")
 
-    # Sample rate must be preserved as 44.1 kHz (resampling is Commit 6)
-    assert preprocessed.sample_rate == 44_100
+    # Sample rate must be resampled to 16 kHz target
+    assert preprocessed.sample_rate == 16_000
     # Must be mono
     assert preprocessed.channels == 1
     assert preprocessed.audio_data.ndim == 1
+    # Sample count must match 16 kHz * 5s
+    assert abs(len(preprocessed.audio_data) - int(16_000 * duration)) <= 1
     # Normalized to 0.95 peak
     assert np.isclose(preprocessed.peak_amplitude, 0.95, atol=1e-4)
     assert preprocessed.metadata["converted_to_mono"] is True
     assert preprocessed.metadata["original_channels"] == 2
+    assert preprocessed.metadata["was_resampled"] is True
+    assert preprocessed.metadata["original_sample_rate"] == 44_100
+    assert preprocessed.metadata["target_sample_rate"] == 16_000
     assert preprocessed.participant_id == "P099"
+
 
 
 def test_preprocess_audio_to_recording():
@@ -718,4 +726,123 @@ def test_preprocess_audio_invalid_inputs():
     )
     with pytest.raises(AudioDataError, match="zero samples"):
         preprocess_audio(empty_rec)
+
+
+# ===========================================================================
+# Tests — 16 kHz Resampling (Commit 6)
+# ===========================================================================
+
+def test_resample_audio_44k_to_16k():
+    """Verify resample_audio converts 44.1 kHz audio to exactly 16 kHz."""
+    orig_sr = 44_100
+    target_sr = 16_000
+    duration = 1.0
+
+    t = np.linspace(0, duration, int(orig_sr * duration), endpoint=False)
+    orig_data = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+
+    resampled, was_resampled = resample_audio(
+        orig_data,
+        orig_sample_rate=orig_sr,
+        target_sample_rate=target_sr,
+    )
+
+    assert was_resampled is True
+    assert resampled.ndim == 1
+    assert resampled.dtype == np.float32
+    assert len(resampled) == int(target_sr * duration)
+    assert abs(len(resampled) - 16_000) <= 1
+
+
+def test_resample_audio_16k_passthrough():
+    """Verify resample_audio returns identical data without resampling when already 16 kHz."""
+    sr = 16_000
+    t = np.linspace(0, 1.0, sr, endpoint=False)
+    data = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+
+    resampled, was_resampled = resample_audio(
+        data,
+        orig_sample_rate=sr,
+        target_sample_rate=sr,
+    )
+
+    assert was_resampled is False
+    assert resampled.ndim == 1
+    assert len(resampled) == sr
+    assert np.allclose(resampled, data)
+
+
+def test_resample_audio_48k_to_16k():
+    """Verify resample_audio handles 48 kHz studio audio down to 16 kHz."""
+    orig_sr = 48_000
+    target_sr = 16_000
+    data = np.ones(orig_sr, dtype=np.float32) * 0.5
+
+    resampled, was_resampled = resample_audio(
+        data,
+        orig_sample_rate=orig_sr,
+        target_sample_rate=target_sr,
+    )
+
+    assert was_resampled is True
+    assert len(resampled) == target_sr
+
+
+def test_resample_audio_invalid_inputs():
+    """Verify resample_audio safely rejects invalid sample rates and corrupted audio data."""
+    valid_data = np.ones(1000, dtype=np.float32)
+
+    with pytest.raises(AudioSampleRateError, match="Original sample rate"):
+        resample_audio(valid_data, orig_sample_rate=0, target_sample_rate=16_000)
+
+    with pytest.raises(AudioSampleRateError, match="Target sample rate"):
+        resample_audio(valid_data, orig_sample_rate=44_100, target_sample_rate=-16_000)
+
+    with pytest.raises(AudioDataError, match="empty"):
+        resample_audio(np.array([], dtype=np.float32), orig_sample_rate=44_100, target_sample_rate=16_000)
+
+    with pytest.raises(AudioDataError, match="non-finite"):
+        resample_audio(np.array([0.1, np.nan]), orig_sample_rate=44_100, target_sample_rate=16_000)
+
+
+def test_preprocess_pipeline_16k_passthrough(synthetic_wav_file: Path):
+    """Verify preprocessing pipeline preserves already 16 kHz sample rate without resampling."""
+    preprocessed = preprocess_audio(synthetic_wav_file)
+
+    assert preprocessed.sample_rate == 16_000
+    assert preprocessed.metadata["was_resampled"] is False
+    assert preprocessed.metadata["original_sample_rate"] == 16_000
+    assert preprocessed.metadata["target_sample_rate"] == 16_000
+
+
+def test_preprocess_pipeline_44k_resampling():
+    """Verify full preprocessing pipeline ingests 44.1 kHz audio and produces clean 16 kHz mono waveform."""
+    duration = 5.0
+    wav_bytes = _create_synthetic_wav_bytes(
+        duration_seconds=duration,
+        sample_rate=44_100,
+        channels=1,
+    )
+
+    preprocessed = preprocess_audio(wav_bytes)
+
+    assert preprocessed.sample_rate == 16_000
+    assert preprocessed.channels == 1
+    assert preprocessed.audio_data.ndim == 1
+    assert preprocessed.metadata["was_resampled"] is True
+    assert preprocessed.metadata["original_sample_rate"] == 44_100
+    assert preprocessed.metadata["target_sample_rate"] == 16_000
+    assert abs(len(preprocessed.audio_data) - int(16_000 * duration)) <= 1
+    assert np.isclose(preprocessed.peak_amplitude, 0.95, atol=1e-4)
+
+
+def test_voice_preprocessor_resample_helper():
+    """Verify VoicePreprocessor.resample helper method."""
+    preprocessor = VoicePreprocessor()
+    data = np.ones(44_100, dtype=np.float32) * 0.5
+    resampled, was_resampled = preprocessor.resample(data, orig_sample_rate=44_100)
+
+    assert was_resampled is True
+    assert len(resampled) == 16_000
+
 
