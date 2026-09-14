@@ -1,0 +1,31 @@
+# Configuration template only. Azure execution has NOT been performed.
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+display_name: questionnaire-training
+experiment_name: questionnaire-training
+# Repository-root code snapshot. This template is NOT runnable until the future
+# Azure-specific entrypoint below exists and is substituted for the placeholder.
+code: ../../..
+command: >-
+  python <future-azure-questionnaire-training-entrypoint.py>
+  --training-data ${{inputs.questionnaire_training_data}}
+  --model-output ${{outputs.model_artifacts}}
+  --evaluation-output ${{outputs.evaluation_artifacts}}
+environment: azureml:questionnaire-sklearn:1
+compute: azureml:<questionnaire-compute-cluster-name>
+# Reserved architecture contract for the future Azure-specific entrypoint. The
+# current local train_models.py does not consume this mounted Azure ML input.
+inputs:
+  questionnaire_training_data:
+    type: uri_folder
+    path: azureml:<private-questionnaire-data-asset>@latest
+    mode: ro_mount
+outputs:
+  model_artifacts:
+    type: uri_folder
+    mode: rw_mount
+    path: azureml://datastores/<artifact-datastore-name>/paths/questionnaire/${{name}}/models
+  evaluation_artifacts:
+    type: uri_folder
+    mode: rw_mount
+    path: azureml://datastores/<artifact-datastore-name>/paths/questionnaire/${{name}}/evaluation
