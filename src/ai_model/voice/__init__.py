@@ -62,5 +62,6 @@ from .preprocessing import (
     normalize_amplitude,
     preprocess_audio,
     resample_audio,
+    trim_silence,
 )
 

@@ -5,8 +5,9 @@ Implements the modular, deterministic preprocessing pipeline for voice recording
     1. Audio Ingestion: Load from local file, in-memory bytes, or AudioRecording.
     2. Mono Conversion: Downmix multi-channel / stereo audio to single-channel mono.
     3. 16 kHz Resampling: Polyphase resampling to 16,000 Hz if sample rate differs.
-    4. Amplitude Normalization: Scale waveform peak to target peak (default 0.95).
-    5. Clean Waveform Output: Return PreprocessedAudio container ready for downstream stages.
+    4. Silence Handling: Detect and trim leading/trailing silence using RMS threshold.
+    5. Amplitude Normalization: Scale waveform peak to target peak (default 0.95).
+    6. Clean Waveform Output: Return PreprocessedAudio container ready for downstream stages.
 
 Specifications adhere to:
     - Centralized config: src/ai_model/voice/config.py (AudioConfig)
@@ -14,7 +15,6 @@ Specifications adhere to:
     - Target: WAV, mono, 16 kHz, ~30-60 seconds.
 
 Note:
-    - Silence trimming is deferred to Commit 7.
     - Feature extraction and model inference are handled in subsequent modules.
 """
 
@@ -211,6 +211,94 @@ def resample_audio(
     return resampled, True
 
 
+def trim_silence(
+    audio_data: np.ndarray,
+    sample_rate: int = AUDIO_CONFIG.target_sample_rate,
+    top_db: int = AUDIO_CONFIG.silence_top_db,
+    frame_length: int = 512,
+    min_duration_after_trim: float = AUDIO_CONFIG.min_duration_after_trim,
+) -> Tuple[np.ndarray, bool, int, int]:
+    """
+    Trim leading and trailing silence from a 1D audio waveform using an RMS energy threshold.
+
+    - Detects speech onset and offset using frame-level RMS energy relative to peak energy.
+    - Preserves internal pauses (hesitations, phrase gaps) essential for stress assessment.
+    - Safely handles completely silent audio by returning the original array untrimmed.
+    - Enforces min_duration_after_trim to prevent over-trimming meaningful low-energy speech.
+
+    Parameters:
+        audio_data: 1D numpy array of float32 audio waveform.
+        sample_rate: Audio sampling frequency in Hz (default: 16,000 Hz).
+        top_db: Decibel threshold below peak RMS to classify as silence (default: 25 dB).
+        frame_length: Analysis window size in samples (default: 512).
+        min_duration_after_trim: Minimum duration in seconds required after trimming (default: 3.0s).
+
+    Returns:
+        Tuple of (trimmed_waveform, was_trimmed_bool, leading_samples_count, trailing_samples_count).
+
+    Raises:
+        AudioDataError: If audio_data is empty or contains non-finite values.
+    """
+    if audio_data is None or audio_data.size == 0:
+        raise AudioDataError("Cannot trim silence from empty audio array.")
+
+    if not np.all(np.isfinite(audio_data)):
+        raise AudioDataError("Audio waveform contains non-finite values (NaN or Inf).")
+
+    if audio_data.ndim != 1:
+        raise AudioDataError(f"trim_silence expects 1D array, got shape {audio_data.shape}.")
+
+    peak = float(np.max(np.abs(audio_data)))
+    if peak == 0.0:
+        # Completely silent audio: return untrimmed safely
+        return audio_data.astype(np.float32, copy=True), False, 0, 0
+
+    # Moving average frame-level RMS calculation
+    win_len = min(frame_length, len(audio_data))
+    window = np.ones(win_len, dtype=np.float32) / win_len
+    squared = audio_data ** 2
+    rms = np.sqrt(np.convolve(squared, window, mode="same"))
+
+    max_rms = float(np.max(rms))
+    if max_rms == 0.0:
+        return audio_data.astype(np.float32, copy=True), False, 0, 0
+
+    # Decibel threshold relative to max RMS
+    threshold = max_rms * (10.0 ** (-float(top_db) / 20.0))
+    non_silent_indices = np.where(rms >= threshold)[0]
+
+    if len(non_silent_indices) == 0:
+        return audio_data.astype(np.float32, copy=True), False, 0, 0
+
+    # Expand slightly by half-window to avoid clipping speech onsets/offsets
+    start_idx = max(0, int(non_silent_indices[0]) - win_len // 2)
+    end_idx = min(len(audio_data), int(non_silent_indices[-1]) + win_len // 2)
+
+    trimmed_length = end_idx - start_idx
+    min_samples = int(min_duration_after_trim * sample_rate)
+
+    # Protect against removing meaningful speech below min_duration_after_trim
+    if trimmed_length < min_samples:
+        if len(audio_data) >= min_samples:
+            # Expand around speech center to preserve at least min_samples
+            center = (start_idx + end_idx) // 2
+            half_min = min_samples // 2
+            start_idx = max(0, center - half_min)
+            end_idx = min(len(audio_data), start_idx + min_samples)
+            if end_idx - start_idx < min_samples and start_idx > 0:
+                start_idx = max(0, end_idx - min_samples)
+        else:
+            return audio_data.astype(np.float32, copy=True), False, 0, 0
+
+    leading_samples = start_idx
+    trailing_samples = len(audio_data) - end_idx
+
+    was_trimmed = (leading_samples > 0 or trailing_samples > 0)
+    trimmed_waveform = audio_data[start_idx:end_idx].astype(np.float32, copy=True)
+
+    return trimmed_waveform, was_trimmed, leading_samples, trailing_samples
+
+
 def normalize_amplitude(
     audio_data: np.ndarray,
     target_peak: float = 0.95,
@@ -268,11 +356,9 @@ def preprocess_audio(
         2. Validate audio structure and contents.
         3. Convert audio to mono (averaging channels if stereo/multichannel).
         4. Resample audio to 16 kHz (config.target_sample_rate) if different.
-        5. Normalize amplitude to target peak (config.normalization_peak = 0.95).
-        6. Return clean PreprocessedAudio container ready for downstream stages.
-
-    Note:
-        Silence trimming is deferred to Commit 7.
+        5. Silence handling: Trim leading and trailing silence (RMS threshold).
+        6. Normalize amplitude to target peak (config.normalization_peak = 0.95).
+        7. Return clean PreprocessedAudio container ready for downstream stages.
 
     Parameters:
         audio: AudioRecording instance, file path (str/Path), or raw WAV bytes.
@@ -323,13 +409,21 @@ def preprocess_audio(
         target_sample_rate=config.target_sample_rate,
     )
 
-    # 5. Amplitude normalization
-    normalized_waveform, orig_peak = normalize_amplitude(
+    # 5. Silence handling: trim leading and trailing silence (after resampling, before normalization)
+    trimmed_waveform, silence_trimmed, leading_samples, trailing_samples = trim_silence(
         resampled_waveform,
+        sample_rate=config.target_sample_rate,
+        top_db=config.silence_top_db,
+        min_duration_after_trim=config.min_duration_after_trim,
+    )
+
+    # 6. Amplitude normalization
+    normalized_waveform, orig_peak = normalize_amplitude(
+        trimmed_waveform,
         target_peak=config.normalization_peak,
     )
 
-    # 6. Metadata tracking
+    # 7. Metadata tracking
     duration_seconds = len(normalized_waveform) / float(config.target_sample_rate)
     metadata = {
         "original_channels": original_channels,
@@ -337,6 +431,9 @@ def preprocess_audio(
         "original_sample_rate": orig_sample_rate,
         "target_sample_rate": config.target_sample_rate,
         "was_resampled": was_resampled,
+        "silence_trimmed": silence_trimmed,
+        "leading_silence_samples": leading_samples,
+        "trailing_silence_samples": trailing_samples,
         "original_peak": orig_peak,
         "normalized_peak": float(np.max(np.abs(normalized_waveform))) if len(normalized_waveform) > 0 else 0.0,
         "normalization_target_peak": config.normalization_peak,
@@ -380,6 +477,23 @@ class VoicePreprocessor:
         """Resample audio waveform to target sample rate (default 16 kHz)."""
         target = target_sample_rate if target_sample_rate is not None else self.config.target_sample_rate
         return resample_audio(audio_data, orig_sample_rate, target_sample_rate=target)
+
+    def trim_silence(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: Optional[int] = None,
+        top_db: Optional[int] = None,
+        min_duration_after_trim: Optional[float] = None,
+    ) -> Tuple[np.ndarray, bool, int, int]:
+        """Trim leading and trailing silence from audio waveform."""
+        sr = sample_rate if sample_rate is not None else self.config.target_sample_rate
+        db = top_db if top_db is not None else self.config.silence_top_db
+        min_dur = (
+            min_duration_after_trim
+            if min_duration_after_trim is not None
+            else self.config.min_duration_after_trim
+        )
+        return trim_silence(audio_data, sample_rate=sr, top_db=db, min_duration_after_trim=min_dur)
 
     def normalize(
         self,

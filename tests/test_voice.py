@@ -55,6 +55,7 @@ from src.ai_model.voice.preprocessing import (
     normalize_amplitude,
     preprocess_audio,
     resample_audio,
+    trim_silence,
 )
 
 
@@ -844,5 +845,173 @@ def test_voice_preprocessor_resample_helper():
 
     assert was_resampled is True
     assert len(resampled) == 16_000
+
+
+# ===========================================================================
+# Tests — Silence Handling & Trimming (Commit 7)
+# ===========================================================================
+
+def test_trim_silence_leading_and_trailing():
+    """Verify trim_silence detects and trims leading and trailing silence."""
+    sr = 16_000
+    leading_silence = np.zeros(sr * 1, dtype=np.float32)       # 1 sec silence
+    t = np.linspace(0, 4.0, sr * 4, endpoint=False)
+    speech = (np.sin(2 * np.pi * 440 * t) * 0.5).astype(np.float32)  # 4 sec tone
+    trailing_silence = np.zeros(sr * 1, dtype=np.float32)      # 1 sec silence
+    audio = np.concatenate([leading_silence, speech, trailing_silence])
+
+    trimmed, was_trimmed, leading, trailing = trim_silence(audio, sample_rate=sr)
+
+    assert was_trimmed is True
+    assert abs(leading - 16_000) <= 512
+    assert abs(trailing - 16_000) <= 512
+    assert abs(len(trimmed) - 64_000) <= 1024
+    assert len(trimmed) < len(audio)
+    assert np.isclose(np.max(np.abs(trimmed)), 0.5, atol=1e-3)
+
+
+def test_trim_silence_preserves_internal_pauses():
+    """Verify trim_silence preserves internal conversational pauses while removing outer silence."""
+    sr = 16_000
+    lead_silence = np.zeros(sr * 1, dtype=np.float32)          # 1 sec leading
+    t1 = np.linspace(0, 3.0, sr * 3, endpoint=False)
+    speech1 = (np.sin(2 * np.pi * 440 * t1) * 0.5).astype(np.float32)  # 3 sec speech
+    internal_pause = np.zeros(sr * 2, dtype=np.float32)        # 2 sec internal pause
+    t2 = np.linspace(0, 3.0, sr * 3, endpoint=False)
+    speech2 = (np.sin(2 * np.pi * 880 * t2) * 0.5).astype(np.float32)  # 3 sec speech
+    trail_silence = np.zeros(sr * 1, dtype=np.float32)         # 1 sec trailing
+    audio = np.concatenate([lead_silence, speech1, internal_pause, speech2, trail_silence])
+
+    trimmed, was_trimmed, leading, trailing = trim_silence(audio, sample_rate=sr)
+
+    assert was_trimmed is True
+    assert abs(leading - 16_000) <= 512
+    assert abs(trailing - 16_000) <= 512
+    assert abs(len(trimmed) - (8 * sr)) <= 1024
+
+    # Verify the internal pause is intact within the trimmed audio
+    pause_segment = trimmed[int(3.5 * sr) : int(4.5 * sr)]
+    assert np.allclose(pause_segment, 0.0)
+
+
+def test_trim_silence_completely_silent_audio():
+    """Verify completely silent audio is returned intact without error or truncation."""
+    sr = 16_000
+    silent_audio = np.zeros(sr * 5, dtype=np.float32)
+
+    trimmed, was_trimmed, leading, trailing = trim_silence(silent_audio, sample_rate=sr)
+
+    assert was_trimmed is False
+    assert leading == 0
+    assert trailing == 0
+    assert len(trimmed) == len(silent_audio)
+    assert np.array_equal(trimmed, silent_audio)
+
+
+def test_trim_silence_no_silence_to_trim():
+    """Verify audio with speech throughout is not truncated."""
+    sr = 16_000
+    t = np.linspace(0, 5.0, sr * 5, endpoint=False)
+    continuous_speech = (np.sin(2 * np.pi * 440 * t) * 0.6).astype(np.float32)
+
+    trimmed, was_trimmed, leading, trailing = trim_silence(continuous_speech, sample_rate=sr)
+
+    assert was_trimmed is False
+    assert leading == 0
+    assert trailing == 0
+    assert len(trimmed) == len(continuous_speech)
+
+
+def test_trim_silence_min_duration_protection():
+    """Verify min_duration_after_trim prevents over-trimming short utterances."""
+    sr = 16_000
+    lead = np.zeros(sr * 2, dtype=np.float32)
+    t = np.linspace(0, 0.5, int(sr * 0.5), endpoint=False)
+    speech = (np.sin(2 * np.pi * 440 * t) * 0.5).astype(np.float32)
+    trail = np.zeros(int(sr * 2.5), dtype=np.float32)
+    audio = np.concatenate([lead, speech, trail])
+
+    min_dur = 3.0
+    trimmed, was_trimmed, leading, trailing = trim_silence(
+        audio, sample_rate=sr, min_duration_after_trim=min_dur
+    )
+
+    assert len(trimmed) >= int(min_dur * sr)
+
+
+def test_trim_silence_invalid_inputs():
+    """Verify trim_silence rejects empty, non-finite, and multi-dimensional inputs."""
+    with pytest.raises(AudioDataError, match="empty"):
+        trim_silence(np.array([], dtype=np.float32))
+
+    with pytest.raises(AudioDataError, match="non-finite"):
+        trim_silence(np.array([0.1, np.nan, 0.2], dtype=np.float32))
+
+    with pytest.raises(AudioDataError, match="1D"):
+        trim_silence(np.zeros((100, 2), dtype=np.float32))
+
+
+def test_preprocess_pipeline_with_silence_trimming():
+    """Verify the full preprocess_audio pipeline trims silence and records metadata."""
+    sr = 16_000
+    lead_silence = np.zeros(sr * 1, dtype=np.int16)
+    t = np.linspace(0, 5.0, sr * 5, endpoint=False)
+    speech = (np.sin(2 * np.pi * 440 * t) * 20000).astype(np.int16)
+    trail_silence = np.zeros(sr * 1, dtype=np.int16)
+    pcm_data = np.concatenate([lead_silence, speech, trail_silence])
+
+    buffer = io.BytesIO()
+    wavfile.write(buffer, sr, pcm_data)
+    wav_bytes = buffer.getvalue()
+
+    preprocessed = preprocess_audio(wav_bytes)
+
+    assert preprocessed.sample_rate == 16_000
+    assert preprocessed.channels == 1
+    assert preprocessed.audio_data.ndim == 1
+    assert preprocessed.metadata["silence_trimmed"] is True
+    assert preprocessed.metadata["leading_silence_samples"] > 0
+    assert preprocessed.metadata["trailing_silence_samples"] > 0
+    assert abs(preprocessed.duration_seconds - 5.0) <= 0.2
+    assert np.isclose(preprocessed.peak_amplitude, 0.95, atol=1e-4)
+
+
+def test_preprocess_pipeline_completely_silent_audio():
+    """Verify preprocess_audio safely processes a completely silent audio file."""
+    sr = 16_000
+    pcm_data = np.zeros(sr * 5, dtype=np.int16)
+
+    buffer = io.BytesIO()
+    wavfile.write(buffer, sr, pcm_data)
+    wav_bytes = buffer.getvalue()
+
+    preprocessed = preprocess_audio(wav_bytes)
+
+    assert preprocessed.sample_rate == 16_000
+    assert preprocessed.channels == 1
+    assert preprocessed.metadata["silence_trimmed"] is False
+    assert preprocessed.metadata["leading_silence_samples"] == 0
+    assert preprocessed.metadata["trailing_silence_samples"] == 0
+    assert preprocessed.peak_amplitude == 0.0
+    assert np.allclose(preprocessed.audio_data, 0.0)
+
+
+def test_voice_preprocessor_trim_silence_method():
+    """Verify VoicePreprocessor controller exposes trim_silence correctly."""
+    preprocessor = VoicePreprocessor()
+    sr = 16_000
+    audio = np.concatenate([
+        np.zeros(sr, dtype=np.float32),
+        np.ones(sr * 4, dtype=np.float32) * 0.5,
+        np.zeros(sr, dtype=np.float32),
+    ])
+
+    trimmed, was_trimmed, leading, trailing = preprocessor.trim_silence(audio)
+
+    assert was_trimmed is True
+    assert leading > 0
+    assert trailing > 0
+    assert len(trimmed) < len(audio)
+
 
 
