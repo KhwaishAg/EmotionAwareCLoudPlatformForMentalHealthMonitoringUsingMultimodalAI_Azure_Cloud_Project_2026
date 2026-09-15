@@ -1,0 +1,10 @@
+{
+  "feature_names": [
+    "B1_sleep_hours",
+    "B2_study_consistency",
+    "B3_social_activity_freq",
+    "B4_screen_time_hours",
+    "B5_routine_irregularity"
+  ],
+  "feature_count": 5
+}

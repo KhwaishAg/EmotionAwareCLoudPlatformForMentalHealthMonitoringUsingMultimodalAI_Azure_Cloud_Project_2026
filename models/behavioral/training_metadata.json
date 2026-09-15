@@ -1,0 +1,14 @@
+{
+  "synthetic_data": true,
+  "notice": "Trained on synthetic self-reported behavioral data. Near-perfect scores reflect clean synthetic class separation, not real-world predictive performance.",
+  "model": "logistic_regression",
+  "n_train": 720,
+  "n_test": 180,
+  "test_accuracy": 0.9888888888888889,
+  "random_seed": 42,
+  "classes": [
+    "high",
+    "low",
+    "moderate"
+  ]
+}
