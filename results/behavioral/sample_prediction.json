@@ -1,0 +1,42 @@
+{
+  "development_test_output": true,
+  "prediction": {
+    "modality": "behavioral",
+    "risk_score": 0.9945281671264409,
+    "risk_level": "high",
+    "confidence": 0.9835845032774218,
+    "available_features": 5,
+    "total_features": 5,
+    "key_factors": [
+      {
+        "feature": "B4_screen_time_hours",
+        "contribution": 1.0,
+        "direction": "increases_risk"
+      },
+      {
+        "feature": "B2_study_consistency",
+        "contribution": 0.8473337715037512,
+        "direction": "decreases_risk"
+      },
+      {
+        "feature": "B1_sleep_hours",
+        "contribution": 0.8100353648192584,
+        "direction": "decreases_risk"
+      },
+      {
+        "feature": "B5_routine_irregularity",
+        "contribution": 0.7710696961814125,
+        "direction": "increases_risk"
+      },
+      {
+        "feature": "B3_social_activity_freq",
+        "contribution": 0.6929127219036303,
+        "direction": "decreases_risk"
+      }
+    ],
+    "data_quality": {
+      "missing_features": 0,
+      "completeness": 1.0
+    }
+  }
+}
