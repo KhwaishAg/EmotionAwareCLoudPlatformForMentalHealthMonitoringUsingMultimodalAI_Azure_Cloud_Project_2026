@@ -1,0 +1,7 @@
+# Standalone reproducibility record for the existing questionnaire ML pipeline.
+# Keep aligned with conda.yml, which Azure ML consumes through environment.yml.
+pandas==2.3.3
+numpy==2.4.2
+scikit-learn==1.8.0
+joblib==1.5.3
+matplotlib==3.10.8

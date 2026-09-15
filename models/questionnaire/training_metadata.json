@@ -1,0 +1,67 @@
+{
+  "dataset_rows": 52,
+  "feature_count": 75,
+  "target_column": "stress_level",
+  "target_classes": [
+    "low",
+    "moderate",
+    "high"
+  ],
+  "class_counts": {
+    "low": 8,
+    "moderate": 20,
+    "high": 24
+  },
+  "excluded_columns": [
+    "Timestamp",
+    "Q4",
+    "Q4_encoded",
+    "stress_level",
+    "stress_level_encoded",
+    "Q21",
+    "Q22",
+    "Q23",
+    "Q24",
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q5",
+    "Q6",
+    "Q7",
+    "Q8",
+    "Q9",
+    "Q10",
+    "Q11",
+    "Q12",
+    "Q13",
+    "Q14",
+    "Q15",
+    "Q16",
+    "Q17",
+    "Q18",
+    "Q19",
+    "Q20",
+    "Q25"
+  ],
+  "random_state": 42,
+  "logistic_regression_configuration": {
+    "C": 1.0,
+    "class_weight": "balanced",
+    "max_iter": 2000,
+    "solver": "lbfgs",
+    "random_state": 42
+  },
+  "random_forest_configuration": {
+    "n_estimators": 300,
+    "max_depth": 4,
+    "min_samples_leaf": 2,
+    "class_weight": "balanced",
+    "random_state": 42,
+    "n_jobs": -1
+  },
+  "imputation_strategy": "median",
+  "scaling_used": true,
+  "class_weight_strategy": "balanced",
+  "synthetic_data_used": false,
+  "training_accuracy_not_used_for_model_claims": true
+}

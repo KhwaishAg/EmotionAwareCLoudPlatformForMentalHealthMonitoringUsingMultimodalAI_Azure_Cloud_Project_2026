@@ -1,0 +1,119 @@
+Multi-Select Encoding Report
+===========================
+Row count: 52
+
+Q10 canonical options:
+- Academic performance/grades
+- Academic workload
+- Assignments
+- Coding/technical assessments
+- Competition with peers
+- Difficulty balancing academics and personal life
+- Exams
+- Family expectations
+- Fear of not getting a job
+- Financial concerns
+- Internship/job applications
+- Lack of sleep
+- Placement preparation
+- Projects
+- Relationship/social concerns
+- Time management
+- Uncertainty about career
+- Other
+
+Q11 canonical options:
+- Anxious
+- Calm
+- Confident
+- Frustrated
+- Happy
+- Irritated
+- Lonely
+- Motivated
+- Neutral
+- Other
+- Overwhelmed
+- Sad
+- Tired
+- Worried
+
+Generated feature names:
+- Q10_Academic_performance_grades
+- Q10_Academic_workload
+- Q10_Assignments
+- Q10_Coding_technical_assessments
+- Q10_Competition_with_peers
+- Q10_Difficulty_balancing_academics_and_personal_life
+- Q10_Exams
+- Q10_Family_expectations
+- Q10_Fear_of_not_getting_a_job
+- Q10_Financial_concerns
+- Q10_Internship_job_applications
+- Q10_Lack_of_sleep
+- Q10_Placement_preparation
+- Q10_Projects
+- Q10_Relationship_social_concerns
+- Q10_Time_management
+- Q10_Uncertainty_about_career
+- Q10_Other
+- Q10_nothing
+- Q11_Anxious
+- Q11_Calm
+- Q11_Confident
+- Q11_Frustrated
+- Q11_Happy
+- Q11_Irritated
+- Q11_Lonely
+- Q11_Motivated
+- Q11_Neutral
+- Q11_Other
+- Q11_Overwhelmed
+- Q11_Sad
+- Q11_Tired
+- Q11_Worried
+
+Q10 selected-option frequencies:
+- Academic performance/grades: 28
+- Academic workload: 27
+- Assignments: 29
+- Coding/technical assessments: 27
+- Competition with peers: 19
+- Difficulty balancing academics and personal life: 15
+- Exams: 31
+- Family expectations: 24
+- Fear of not getting a job: 25
+- Financial concerns: 15
+- Internship/job applications: 27
+- Lack of sleep: 13
+- Placement preparation: 22
+- Projects: 31
+- Relationship/social concerns: 12
+- Time management: 30
+- Uncertainty about career: 30
+
+Q11 selected-option frequencies:
+- Anxious: 33
+- Calm: 13
+- Confident: 10
+- Frustrated: 28
+- Happy: 22
+- Irritated: 24
+- Lonely: 18
+- Motivated: 14
+- Neutral: 23
+- Other: 4
+- Overwhelmed: 25
+- Sad: 17
+- Tired: 27
+- Worried: 29
+
+Normalization performed:
+- "Not getting girlfriend" -> "Relationship/social concerns"
+
+Q10 Nothing responses: 1
+Missing Q10 count: 1
+Missing Q11 count: 1
+Unexpected values: None
+Q10 data-quality conditions (Nothing plus other selections): 0
+Validation result: PASS

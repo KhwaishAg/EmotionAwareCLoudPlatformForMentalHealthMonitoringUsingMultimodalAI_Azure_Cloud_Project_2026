@@ -1,0 +1,50 @@
+Ordinal Encoding Report
+======================
+Number of rows: 52
+Encoded questions: 16
+
+Excluded multi-select questions (handled later):
+- Q10
+- Q11
+
+Category mappings:
+- Q3: {'Less than 2 hours': 0, '2–4 hours': 1, '4–6 hours': 2, '6–8 hours': 3, 'More than 8 hours': 4}
+- Q4: {'1 — Not at all': 1, '2 — Slightly': 2, '3 — Moderately': 3, '4 — Very': 4, '5 — Extremely': 5}
+- Q5: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Always': 4}
+- Q6: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Always': 4}
+- Q7: {'Not difficult at all': 0, 'Slightly difficult': 1, 'Moderately difficult': 2, 'Very difficult': 3, 'Extremely difficult': 4}
+- Q8: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Always': 4}
+- Q9: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Always': 4}
+- Q12: {'1': 1, '2': 2, '3': 3, '4': 4, '5': 5}
+- Q13: {'1': 1, '2': 2, '3': 3, '4': 4, '5': 5}
+- Q14: {'Less than 5 minutes': 0, '5–15 minutes': 1, '15–30 minutes': 2, '30–60 minutes': 3, '1–3 hours': 4, 'More than 3 hours': 5, 'Most of the day': 6}
+- Q15: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Very often': 4}
+- Q16: {'Within a few minutes': 0, 'Within 15–30 minutes': 1, 'Within an hour': 2, 'Within a few hours': 3, 'By the end of the day': 4, 'It usually takes longer than a day': 5}
+- Q17: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Very often': 4}
+- Q18: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Very often': 4}
+- Q19: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Very often': 4}
+- Q20: {'Never': 0, 'Rarely': 1, 'Sometimes': 2, 'Often': 3, 'Very often': 4}
+
+Missing encoded values:
+- Q3_encoded: 0
+- Q4_encoded: 0
+- Q5_encoded: 0
+- Q6_encoded: 0
+- Q7_encoded: 0
+- Q8_encoded: 0
+- Q9_encoded: 1
+- Q12_encoded: 1
+- Q13_encoded: 1
+- Q14_encoded: 13
+- Q15_encoded: 2
+- Q16_encoded: 14
+- Q17_encoded: 1
+- Q18_encoded: 2
+- Q19_encoded: 2
+- Q20_encoded: 2
+
+Q14 "It varies considerably" count: 11
+Q16 "It varies considerably" count: 13
+
+Unexpected categories:
+None
