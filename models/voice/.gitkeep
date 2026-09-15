@@ -1,0 +1,3 @@
+# This directory stores trained voice model artifacts (.joblib, .pkl).
+# Model files are excluded from version control via .gitignore.
+# See src/ai_model/voice/model.py for training instructions.

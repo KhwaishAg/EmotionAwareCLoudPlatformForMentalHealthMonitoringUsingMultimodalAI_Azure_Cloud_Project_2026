@@ -1,26 +1,93 @@
+# ==================================================
 # Python
-
+# ==================================================
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*.so
+*$py.class
 
-# Virtual environments
-
+# ==================================================
+# Virtual Environments
+# ==================================================
 .venv/
 venv/
+ENV/
 env/
 
-# Secrets
+# ==================================================
+# Distribution / Packaging
+# ==================================================
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
 
+# ==================================================
+# IDE / Editor
+# ==================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==================================================
+# OS
+# ==================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==================================================
+# Secrets & Credentials
+# ==================================================
 .env
 .env.*
+*.pem
+*.key
 
-# Local respondent-level questionnaire data
+# ==================================================
+# Azure
+# ==================================================
+azureml-setup/
+.azureml/
 
+# ==================================================
+# Model Artifacts (generated, not source)
+# ==================================================
+models/voice/*.joblib
+models/voice/*.pkl
+models/voice/*.onnx
+
+# ==================================================
+# Raw / Private Participant Data
+# ==================================================
 data/raw/
+data/raw/audio/*.wav
+data/raw/audio/*.mp3
+data/raw/audio/*.flac
+
+# ==================================================
+# Generated Questionnaire Data
+# ==================================================
 data/processed/questionnaire_cleaned.csv
 data/processed/questionnaire_categorical_encoded.csv
 data/processed/questionnaire_multihot_encoded.csv
 data/processed/questionnaire_ordinal_encoded.csv
 data/processed/questionnaire_features.csv
 data/processed/questionnaire_with_target.csv
+
+# Other generated processed data
+data/processed/*.parquet
+
+# ==================================================
+# Jupyter / Notebooks
+# ==================================================
+.ipynb_checkpoints/
+
+# ==================================================
+# Logs & Temp
+# ==================================================
+*.log
+tmp/
