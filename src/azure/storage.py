@@ -600,7 +600,93 @@ class AudioBlobStorage:
                 f"Failed to retrieve properties for blob '{target_name}': {e}"
             ) from e
 
+    # -----------------------------------------------------------------------
+    # Secure Participant Audio Upload Helpers
+    # -----------------------------------------------------------------------
+
+    def upload_participant_file(
+        self,
+        participant_id: str,
+        file_path: Union[str, Path],
+        filename: Optional[str] = None,
+        overwrite: bool = False,
+        metadata: Optional[Dict[str, str]] = None,
+        prefix: Optional[str] = None,
+        verify_magic_bytes: bool = True,
+    ) -> Any:
+        """
+        Securely upload a local participant audio file.
+
+        Delegates to SecureAudioUploadHandler ensuring path validation,
+        audio format inspection, participant scoping, and overwrite safety.
+        """
+        from .upload_handler import SecureAudioUploadHandler
+        uploader = SecureAudioUploadHandler(storage=self)
+        return uploader.upload_file(
+            participant_id=participant_id,
+            file_path=file_path,
+            filename=filename,
+            overwrite=overwrite,
+            metadata=metadata,
+            prefix=prefix,
+            verify_magic_bytes=verify_magic_bytes,
+        )
+
+    def upload_participant_bytes(
+        self,
+        participant_id: str,
+        data: bytes,
+        filename: str,
+        overwrite: bool = False,
+        metadata: Optional[Dict[str, str]] = None,
+        prefix: Optional[str] = None,
+        verify_magic_bytes: bool = True,
+    ) -> Any:
+        """
+        Securely upload in-memory participant audio bytes.
+
+        Delegates to SecureAudioUploadHandler ensuring path validation,
+        audio format inspection, participant scoping, and overwrite safety.
+        """
+        from .upload_handler import SecureAudioUploadHandler
+        uploader = SecureAudioUploadHandler(storage=self)
+        return uploader.upload_bytes(
+            participant_id=participant_id,
+            data=data,
+            filename=filename,
+            overwrite=overwrite,
+            metadata=metadata,
+            prefix=prefix,
+            verify_magic_bytes=verify_magic_bytes,
+        )
+
+    def upload_participant_audio(
+        self,
+        participant_id: str,
+        audio_source: Union[str, Path, bytes, bytearray],
+        filename: Optional[str] = None,
+        overwrite: bool = False,
+        metadata: Optional[Dict[str, str]] = None,
+        prefix: Optional[str] = None,
+        verify_magic_bytes: bool = True,
+    ) -> Any:
+        """
+        Convenience method to securely upload either file or bytes for a participant.
+        """
+        from .upload_handler import SecureAudioUploadHandler
+        uploader = SecureAudioUploadHandler(storage=self)
+        return uploader.upload(
+            participant_id=participant_id,
+            audio_source=audio_source,
+            filename=filename,
+            overwrite=overwrite,
+            metadata=metadata,
+            prefix=prefix,
+            verify_magic_bytes=verify_magic_bytes,
+        )
+
 
 # Aliases for architectural naming conventions
 AzureBlobStorage = AudioBlobStorage
 AudioBlobStorageClient = AudioBlobStorage
+
