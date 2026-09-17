@@ -1,9 +1,10 @@
 """
-Azure Cloud Platform — Custom Storage Exceptions
+Azure Cloud Platform — Custom Exceptions
 
-Defines domain-specific exceptions for Azure Blob Storage operations.
-Ensures errors from azure-storage-blob or invalid local paths/blob names
-are translated into clear, actionable exceptions.
+Defines domain-specific exceptions for Azure Blob Storage and
+Azure Machine Learning operations. Ensures errors from azure-storage-blob,
+azure-ai-ml, or invalid configuration are translated into clear,
+actionable exceptions.
 """
 
 
@@ -45,3 +46,23 @@ class StorageDownloadError(AzureStorageError):
 class StorageDeleteError(AzureStorageError):
     """Raised when a delete operation on Azure Blob Storage fails."""
     pass
+
+
+# ===========================================================================
+# Azure Machine Learning Exceptions
+# ===========================================================================
+
+class AzureMLError(Exception):
+    """Base exception for all Azure Machine Learning operations."""
+    pass
+
+
+class AzureMLConfigurationError(AzureMLError, StorageConfigurationError):
+    """Raised when required Azure ML workspace, subscription, or compute settings are invalid."""
+    pass
+
+
+class AzureMLJobError(AzureMLError):
+    """Raised when creating, validating, or submitting an Azure ML training job fails."""
+    pass
+
