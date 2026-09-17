@@ -156,7 +156,12 @@ from .evaluation import (
     evaluate_voice_confusion_matrix,
     evaluate_voice_model,
 )
-
-
-
+from .predict import (
+    PredictionAudioError,
+    PredictionError,
+    PredictionFeatureError,
+    PredictionModelError,
+    VoicePredictionResult,
+    predict_voice,
+)
 
