@@ -125,6 +125,14 @@ class VoicePredictionResult:
             "metadata": self.metadata,
         }
 
+    def to_fusion_payload(self) -> Any:
+        """
+        Convert this prediction result into a standardized VoiceFusionPayload
+        for consumption by the multimodal fusion layer.
+        """
+        from .fusion_interface import VoiceFusionPayload
+        return VoiceFusionPayload.from_prediction_result(self)
+
 
 # ===========================================================================
 # Core Prediction Interface

@@ -164,4 +164,12 @@ from .predict import (
     VoicePredictionResult,
     predict_voice,
 )
+from .fusion_interface import (
+    MODALITY_NAME,
+    InvalidFusionPayloadError,
+    VoiceFusionIntegrationError,
+    VoiceFusionPayload,
+    prepare_voice_fusion_payload,
+    validate_voice_fusion_payload,
+)
 
