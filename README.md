@@ -1,187 +1,155 @@
-# Emotion Aware Cloud Platform For Mental Health Monitoring Using Multimodal AI
+# Emotion-Aware Cloud Platform for Mental Health Monitoring using Multimodal AI
 
-## Project Overview
+BITE412L — Cloud Computing, Phase I
+Course Instructor: Dr. Priya V
 
-**Emotion Aware Cloud Platform For Mental Health Monitoring Using Multimodal AI** is an academic research and engineering project aimed at developing a **Multimodal Student Stress/Risk Assessment and Early-Intervention Support System**.
+---
 
-The platform is designed to provide a low-burden, explainable, and multi-perspective assessment of student stress and well-being indicators by integrating three complementary, non-invasive modalities:
+## Team Members
 
-1. **Questionnaire** — Subjective / self-reported perspective (academic stress, perceived pressure, emotional self-assessment)
-2. **Voice** — Expressive / acoustic indicators derived from short standardized voice recordings
-3. **Behavioral Information** — Contextual, lifestyle, and academic behavioral indicators (study patterns, sleep regularity, workload trends)
-
-Outputs from these three modalities are synthesized through **multimodal fusion** to generate an estimated risk/stress level along with cross-modal consistency analysis, confidence estimates, factor explainability, and personalized supportive recommendations.
+| Name | Role / Novelty Angle Owned |
+|---|---|
+| Nandini Goyal | AI Model & Intelligence — Attention-based fusion + modality-dropout robustness |
+| Netal Agarwal | Pipeline & Infrastructure — Serverless, event-driven Azure architecture |
+| Khwaish Agarwala | Security & Dashboard — Edge-cloud privacy-preserving design |
 
 ---
 
 ## Problem Statement
 
-College students frequently experience acute and chronic stress stemming from academic workload, examinations, deadlines, and lifestyle adjustments. Conventional assessment methods face notable limitations:
+Mental health conditions such as chronic stress, anxiety, and depression often remain undetected until they significantly affect an individual's wellbeing. Traditional diagnosis relies heavily on periodic self-reported questionnaires, which are subjective, infrequent, and prone to underreporting due to stigma or lack of self-awareness. Existing emotion recognition systems typically rely on a single data modality (facial expression, voice, or text) and are developed/tested only in controlled lab environments, leaving a significant gap between research prototypes and deployable, cloud-scale healthcare systems.
 
-- **Single-modality bias:** Relying solely on questionnaires introduces subjective reporting bias, social desirability bias, or retrospective recall errors.
-- **High user burden:** Complex diagnostic interviews or invasive wearable sensor protocols can create friction, leading to low adherence.
-- **Lack of explainability:** Black-box prediction outputs that state a binary outcome (e.g., "You are stressed") offer little actionable insight and foster distrust.
-- **Inability to capture discordance:** When a student reports feeling "fine" on a questionnaire but exhibits significant acoustic or behavioral stress indicators, single-modality systems fail to detect the underlying tension.
-
-This project addresses these challenges by combining three non-invasive modalities into an integrated, explainable assessment framework.
+This project proposes an emotion-aware cloud platform that fuses speech, text, and physiological signals from wearable devices to detect emotional states with greater accuracy and robustness — including graceful handling of a missing modality — deployed on a fully serverless Azure architecture with a privacy-conscious edge-to-cloud pipeline.
 
 ---
 
-## Current Project Scope
+## Objectives
 
-The implementation scope is explicitly focused and bounded:
+1. Develop a multimodal AI fusion pipeline combining speech, text, and physiological (heart rate + EDA) signals using an attention-based late fusion model, classifying at least 4 emotional/stress states.
+2. Achieve at least 85% classification accuracy on the fused model, benchmarked against single-modality baselines.
+3. Maintain robust performance under modality dropout, with no more than a 10–15% accuracy drop when any single modality is unavailable.
+4. Reduce end-to-end processing latency to under 5 seconds per micro-batch using Azure serverless compute.
+5. Ensure privacy-preserving, secure data handling via edge feature extraction, Microsoft Entra ID authentication, and Azure Key Vault secrets management.
+6. Provide a clinician-facing Power BI dashboard visualizing individual and trend-level emotional states over time, with no hosted web application required.
 
-- **Included Modalities:** Exactly three modalities:
-  1. Questionnaire
-  2. Voice (short audio recordings)
-  3. Behavioral information (academic & lifestyle context)
-- **Target Audience:** College / university students.
-- **Output Objectives:** Estimated stress/risk level, modality breakdown, modality consistency/disagreement, confidence metric, contributing factors (explainability), and supportive early-intervention recommendations.
-
-### Out of Scope (Explicit Exclusions)
-
-The following components are **NOT** part of the current implementation:
-- Facial image or video analysis
-- Facial emotion recognition (FER) / facial expression analysis
-- Wearable or physiological sensors (e.g., smartwatches, ECG, PPG, galvanic skin response)
-- Mandatory biometric hardware
-- Separate natural-language text processing modality (beyond structured questionnaire responses)
+Full detail: [`docs/objectives.md`](docs/objectives.md)
 
 ---
 
-## The Three Modalities
+## Proposed Architecture / Framework
 
 ```
-+-------------------+---------------------------------------------------------+
-| Modality          | Description & Perspective                               |
-+-------------------+---------------------------------------------------------+
-| 1. Questionnaire  | Subjective / Self-Reported Perspective                  |
-|                   | Captures perceived stress, academic load evaluation,     |
-|                   | and self-reported emotional states via structured items.|
-+-------------------+---------------------------------------------------------+
-| 2. Voice          | Acoustic / Expressive Indicator Perspective              |
-|                   | Captures acoustic properties (pitch, energy, spectral   |
-|                   | dynamics, MFCCs) from a short 30-60s spoken response    |
-|                   | to a standardized prompt.                               |
-+-------------------+---------------------------------------------------------+
-| 3. Behavioral     | Contextual / Lifestyle Perspective                      |
-|                   | Captures academic habits, study duration, sleep trends,  |
-|                   | deadline proximity, and routine regularity indicators.   |
-+-------------------+---------------------------------------------------------+
+Simulated device data (WESAD + MELD)
+        |
+        v
+Azure IoT Hub --ingest--> Azure Functions --extract features--> Azure Blob Storage
+                                                                       |
+                                                                       v
+                                                    Azure ML (attention-based fusion model)
+                                                                       |
+                                                                       v
+                                                    Azure Cosmos DB (results + trend history)
+                                                                       |
+                                              +------------------------+------------------------+
+                                              v                                                   v
+                                    Trend/risk detection                              Power BI dashboard
+                                              |
+                                              v
+                          Service Bus -> Notification Hubs -> Clinician alert
+
+Cross-cutting: Microsoft Entra ID (auth) | Azure Key Vault (secrets) | Azure Monitor (logging)
 ```
 
+Full architecture diagrams: [`architecture/`](architecture/)
+
 ---
 
-## High-Level Architecture
+## Technology Stack
 
-The system follows a modular pipeline where each modality is analyzed by a specialized model before multimodal fusion and assessment generation:
+**Cloud Platform:** Microsoft Azure (Azure for Students subscription)
+
+**Ingestion & Messaging:** Azure IoT Hub, Azure Event Hubs/Event Grid, Azure Service Bus
+
+**Compute:** Azure Functions (serverless), Azure Logic Apps (optional orchestration)
+
+**AI / ML:** Azure Machine Learning, Azure AI Speech, Azure AI Language, Python (PyTorch/TensorFlow, scikit-learn, pandas, numpy)
+
+**Storage:** Azure Blob Storage, Azure Cosmos DB, Azure SQL Database
+
+**Security:** Microsoft Entra ID, Azure Key Vault
+
+**Monitoring:** Azure Monitor, Application Insights
+
+**Visualization:** Power BI Desktop
+
+**Dev Tools:** GitHub, VS Code, Azure CLI
+
+Full detail with free-tier breakdown: [`docs/azure_services.md`](docs/azure_services.md)
+
+---
+
+## Dataset Details
+
+| Dataset | Modality | Access |
+|---|---|---|
+| **WESAD** (Wearable Stress and Affect Detection) | Physiological (heart rate, EDA) | Freely downloadable — UCI ML Repository |
+| **MELD** (Multimodal EmotionLines Dataset) | Speech + Text | Freely downloadable — no license request required |
+
+Full details (source, size, records, features, license, preprocessing): [`dataset/dataset_details.md`](dataset/dataset_details.md)
+
+---
+
+## Repository Structure
 
 ```
-Student
-   |
-   +---------------- Questionnaire
-   |                       |
-   |                       v
-   |                 Questionnaire Model
-   |
-   +---------------- Voice (Short Recording)
-   |                       |
-   |                       v
-   |                    Voice Model
-   |
-   +---------------- Behavioral Information
-                           |
-                           v
-                    Behavioral Model
-                           |
-                           v
-                    Multimodal Fusion
-                           |
-                           v
-                    Overall Assessment
-                           |
-             +-------------+-------------+
-             |             |             |
-        Consistency    Confidence   Explainability
-                                           |
-                                           v
-                               Personalized Supportive
-                                   Recommendations
-```
-
----
-
-## Team Ownership & Branch Strategy
-
-The project is developed by a 3-member team with clear modular responsibilities across dedicated feature branches:
-
-| Member | Branch | Primary Responsibility | Scope Details |
-|---|---|---|---|
-| **Khwaish** (Member 1) | `feature/Khwaish` | **Questionnaire Modality** | Questionnaire design, data representation, questionnaire ML model |
-| **Nandini** (Member 2) | `feature/Nandini` | **Voice Modality** | Audio preprocessing pipeline, acoustic feature extraction, voice ML model |
-| **Netal** (Member 3) | `feature/Netal` | **Behavioral Modality** & Integration | Behavioral feature engineering, behavioral model, multimodal fusion, backend & deployment integration |
-
-### Git Branch Structure
-
-- `main` — Production-ready, stable releases.
-- `develop` — Shared integration branch.
-- `feature/Khwaish` — Questionnaire modality development.
-- `feature/Nandini` — Voice modality development.
-- `feature/Netal` — Behavioral modality, fusion, and integration development.
-
-*Note: All current work for Member 2 remains strictly on `feature/Nandini`.*
-
----
-
-## Planned Novelty
-
-The project investigates several novel system-level characteristics:
-
-1. **Low-Burden Multimodal Assessment:** Combines short audio (30–60 s), lightweight questionnaire items, and basic behavioral indicators without requiring wearable hardware or invasive monitoring.
-2. **Tri-Perspective Synthesis:** Merges subjective self-report, objective acoustic signals, and contextual behavioral patterns for robust risk estimation.
-3. **Cross-Modal Consistency & Disagreement Analysis:** Explicitly quantifies whether modalities agree (e.g., all indicate mild tension) or conflict (e.g., low self-reported stress but high vocal/behavioral tension), highlighting masked stress.
-4. **Confidence-Aware Assessment:** Reports uncertainty/confidence scores alongside estimates so students and advisors understand output reliability.
-5. **Factor Explainability:** Breaks down contributing factors per modality rather than delivering an opaque score.
-6. **Non-Clinical Early-Intervention Support:** Maps assessment profiles to constructive, non-clinical recommendations (e.g., study pacing, sleep hygiene, breathing exercises, campus wellness resources).
-
-*(Note: These novelty concepts represent planned research goals and will be iteratively implemented and validated.)*
-
----
-
-## Non-Clinical Disclaimer
-
-> [!IMPORTANT]
-> **This platform is an academic research and early-intervention support system, NOT a medical diagnostic tool.**
->
-> - The system does **not** diagnose depression, anxiety, or any psychiatric disorder.
-> - The system does **not** provide medical or clinical advice.
-> - The system does **not** replace licensed psychologists, psychiatrists, counselors, or medical professionals.
-> - All outputs are framed strictly as **stress/risk indicators**, **estimated well-being indicators**, and **supportive recommendations** for proactive student self-care.
-
----
-
-## Repository Directory Guide
-
-```
-EmotionAwareCloudPlatform/
-|-- architecture/       # System architecture documentation and pipeline diagrams
-|-- dataset/            # Data schemas, voice recording protocols, and ethical guidelines
-|-- docs/               # Project documentation index, glossary, and ethical policies
-|-- literature_survey/  # Literature reviews across questionnaire, voice, and behavioral modalities
-|-- presentation/       # Presentation decks, milestone reviews, and demo assets
-|-- references/         # Academic references, citation standards, and bibliography
-|-- results/            # Experimental results, evaluation metrics, and benchmarking logs
-|-- src/                # Planned source code
-|   |-- ai_model/       # Modality models (Questionnaire, Voice, Behavioral) & fusion logic
-|   |-- azure/          # Cloud infrastructure and deployment specifications
-|   |-- backend/        # Planned REST API and assessment orchestration service
-|   +-- frontend/       # Planned student assessment and feedback dashboard UI
-+-- README.md           # Root project overview and architecture documentation (this file)
+EmotionAwarePlatform_Azure_Cloud_Project_2026/
+│
+├── README.md                       ← this file
+├── docs/                           ← objectives, novelty summary, azure services planning
+├── literature_survey/              ← 15-paper survey + individual research gap analysis
+├── architecture/                   ← both mandatory architecture diagrams
+├── dataset/                        ← dataset details (WESAD + MELD)
+├── src/
+│   ├── ai_model/                   ← Nandini: fusion model, baselines, training scripts
+│   ├── azure/
+│   │   ├── ingestion/              ← Netal: IoT Hub setup, simulated device script
+│   │   ├── processing/             ← Netal: Azure Functions, feature extraction
+│   │   └── security/               ← Khwaish: Entra ID, Key Vault, encryption config
+│   └── dashboard/                  ← Khwaish: Power BI dashboard files, alert logic
+├── results/                        ← model evaluation results, latency benchmarks
+├── presentation/                   ← final presentation deck
+└── references/                     ← citation list, reference materials
 ```
 
 ---
 
-## Current Development Status
+## Work Distribution
 
-- **Phase:** Documentation, architectural alignment, and modality protocol definition.
-- **Implementation Status:** Code implementation is pending. Modality models, pipelines, backend APIs, and frontend interfaces are in the design and documentation stage across respective feature branches.
+See [`docs/WORK_DISTRIBUTION.md`](docs/WORK_DISTRIBUTION.md) for the full team task division, individual responsibilities, objective ownership, and Git branch workflow.
+
+---
+
+## Git Workflow
+
+```
+main
+ │
+ develop
+ ┌───────────┼───────────┐
+ │           │           │
+feature/    feature/    feature/
+student-a-  student-b-  student-c-
+model       pipeline    security-dashboard
+```
+
+No one commits directly to `main`. All work merges via Pull Request into `develop`, reviewed by the team, then merged to `main` and tagged `v1.0-Phase1` once stable.
+
+---
+
+## Member 1 implementation status
+
+**Questionnaire modality: COMPLETE.** It includes questionnaire preprocessing, feature engineering, a Q4-derived stress target, Logistic Regression and Random Forest pipelines, 4-fold stratified cross-validation, explainability, confidence, a prediction API, and a multimodal fusion contract. Voice and behavioral components remain separate and are not represented as complete in this repository status.
+
+## Status
+
+Phase I — Planning and architecture design complete. Implementation in progress.

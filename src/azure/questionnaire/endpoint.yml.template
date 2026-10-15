@@ -1,0 +1,20 @@
+# Configuration template only. Endpoint creation has NOT been performed.
+# Copy this file locally, replace every <...> placeholder, then run:
+#   az ml online-endpoint create -f endpoint.yml \
+#     --workspace-name <workspace-name> --resource-group <resource-group>
+#
+# Do not commit a filled-in copy of this file.
+
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+
+name: <questionnaire-endpoint-name>
+description: >-
+  Azure ML managed online endpoint for non-clinical questionnaire stress-risk
+  inference. Accepts structured questionnaire responses (Q1–Q20 required,
+  Q21–Q25 optional) and returns the multimodal fusion contract.
+auth_mode: key
+
+tags:
+  project: emotion-aware-cloud-platform
+  modality: questionnaire
+  non_clinical: "true"

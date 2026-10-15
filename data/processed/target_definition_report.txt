@@ -1,0 +1,33 @@
+Target Definition Report
+=======================
+Target definition:
+- Source column: Q4_encoded
+- Project-defined mapping: Q4 1 or 2 -> low; Q4 3 -> moderate; Q4 4 or 5 -> high
+- Encoded target mapping: low -> 0, moderate -> 1, high -> 2
+
+Mapping table:
+- Q4 1 -> low -> 0
+- Q4 2 -> low -> 0
+- Q4 3 -> moderate -> 1
+- Q4 4 -> high -> 2
+- Q4 5 -> high -> 2
+
+Class distribution:
+- low count: 8
+- moderate count: 20
+- high count: 24
+- low percentage: 15.38%
+- moderate percentage: 38.46%
+- high percentage: 46.15%
+- total rows: 52
+- missing Q4 count: 0
+- missing target count: 0
+- minimum class size: 8
+- maximum class size: 24
+- class imbalance ratio: 3.00
+
+Leakage prevention rule:
+- Q4_encoded is the source of the target and must not be used as a predictor feature.
+- Excluded predictor columns: Q4, Q4_encoded, stress_level, stress_level_encoded
+
+Validation result: PASS

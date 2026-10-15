@@ -1,0 +1,42 @@
+# Configuration template only. Model registration has NOT been performed.
+# Copy this file locally, replace every <...> placeholder, then run:
+#   az ml model create -f model.yml --workspace-name <workspace> --resource-group <rg>
+#
+# The artifact path below must match the output location of a completed training job.
+# Do not commit a filled-in copy of this file.
+
+$schema: https://azuremlschemas.azureedge.net/latest/model.schema.json
+
+name: questionnaire-random-forest
+version: 1
+description: >-
+  Non-clinical questionnaire stress-risk classifier (Random Forest pipeline).
+  Trained on 52 real student questionnaire responses using 4-fold stratified
+  cross-validation. Target is Q4-derived (low / moderate / high). Q4 and
+  Timestamp are excluded from predictors. This is a project-defined
+  assessment model; it is not a clinical diagnostic tool and its confidence
+  output is a model heuristic, not clinical certainty.
+
+# Replace with the datastore path where the completed training job wrote its output.
+# Example: azureml://datastores/<artifact-datastore-name>/paths/questionnaire/<job-name>/models
+path: azureml://datastores/<artifact-datastore-name>/paths/questionnaire/<job-name>/models
+
+type: custom_model
+
+tags:
+  project: emotion-aware-cloud-platform
+  modality: questionnaire
+  model_type: random_forest
+  framework: scikit-learn
+  sklearn_version: "1.8.0"
+  non_clinical: "true"
+  synthetic_data_used: "false"
+  random_state: "42"
+
+properties:
+  selected_artifact: random_forest.joblib
+  feature_count: "75"
+  target_column: stress_level
+  target_classes: "low,moderate,high"
+  training_rows: "52"
+  cross_validation: 4-fold-stratified

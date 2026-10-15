@@ -1,0 +1,7 @@
+# Copy locally and replace every <...> value before `az ml workspace create`.
+$schema: https://azuremlschemas.azureedge.net/latest/workspace.schema.json
+name: <azure-ml-workspace-name>
+resource_group: <azure-resource-group>
+location: <azure-region>
+display_name: Questionnaire ML Workspace
+description: Workspace configuration for the non-clinical questionnaire modality.
