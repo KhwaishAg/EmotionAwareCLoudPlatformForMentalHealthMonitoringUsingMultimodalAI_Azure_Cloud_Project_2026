@@ -161,8 +161,10 @@ from .predict import (
     PredictionError,
     PredictionFeatureError,
     PredictionModelError,
+    VoiceModelNotTrainedError,
     VoicePredictionResult,
     predict_voice,
+    predict_voice_from_features,
 )
 from .fusion_interface import (
     MODALITY_NAME,

@@ -1,0 +1,23 @@
+BEHAVIORAL MODEL EVALUATION (SYNTHETIC DATA)
+==============================================
+NOTICE: Trained and evaluated on synthetic self-reported behavioral
+data. Scores reflect clean synthetic class separation, not real-world
+performance. Do not present as validated clinical or research results.
+
+Test accuracy: 0.9889
+
+Classification report:
+              precision    recall  f1-score   support
+
+        high       1.00      0.98      0.99        60
+         low       0.98      1.00      0.99        60
+    moderate       0.98      0.98      0.98        60
+
+    accuracy                           0.99       180
+   macro avg       0.99      0.99      0.99       180
+weighted avg       0.99      0.99      0.99       180
+
+Confusion matrix (rows=true, cols=pred, order=[low, moderate, high]):
+[[60  0  0]
+ [ 1 59  0]
+ [ 0  1 59]]
