@@ -1,0 +1,3 @@
+# This directory stores raw audio recordings for development and testing.
+# Participant audio files (.wav) are excluded from version control via .gitignore.
+# Only synthetic/generated test fixtures should be committed.
