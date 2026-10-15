@@ -1,1 +1,34 @@
-# ======================================================
+# =============================================================
+# Emotion Aware Cloud Platform — Voice Modality Dependencies
+# =============================================================
+# Minimal, justified dependency set for the voice processing
+# pipeline. Each dependency serves a specific, documented role.
+# =============================================================
+
+# --- Scientific Computing ---
+numpy>=1.24.0              # Array operations, numerical computation
+pandas>=2.0.0              # Tabular data handling (feature datasets, metadata)
+scipy>=1.10.0              # Signal processing utilities (resampling fallback)
+
+# --- Audio Processing ---
+librosa>=0.10.0            # Audio loading, MFCC, spectral features, pitch tracking
+soundfile>=0.12.0          # WAV file I/O (backend for librosa)
+
+# --- Machine Learning ---
+scikit-learn>=1.3.0        # Classical ML models (LogisticRegression, RandomForest),
+                           # preprocessing (StandardScaler), evaluation metrics,
+                           # participant-level splitting (GroupKFold)
+joblib>=1.3.0              # Model serialization / persistence
+
+# --- Cloud Storage & Machine Learning ---
+azure-storage-blob>=12.19.0    # Azure Blob Storage client for audio and artifact persistence
+azure-ai-ml>=1.15.0            # Azure ML SDK v2 for training job configuration and orchestration
+azure-identity>=1.15.0         # Azure Active Directory / Managed Identity authentication
+
+# --- Plotting (questionnaire evaluation reports) ---
+matplotlib             # Evaluation figures (confusion matrices)
+
+# --- Testing ---
+pytest>=7.4.0              # Test runner for automated test suite
+
+
