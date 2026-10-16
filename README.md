@@ -188,10 +188,11 @@ EmotionAwareCloudPlatform/
 | Questionnaire model + prediction (`src/ai_model/questionnaire/`) | Implemented; trained on 52 real responses (small sample, no clinical validation) |
 | Behavioral model + prediction (`src/ai_model/behavioral/`) | Implemented; **trained on synthetic data only** - accuracy figures are not real-world performance |
 | Voice pipeline (`src/ai_model/voice/`) | Preprocessing, features, model code, reproducible training/evaluation CLI (`train_voice.py`) and safe inference implemented and tested on toy data; **no stress-risk voice model has been trained** (no stress-labeled audio exists). A separate, experimental *acted-emotion* model trained on CREMA-D is present (held-out accuracy 0.48 vs 0.17 chance; shown separately, never fused, not a stress measure). See [`docs/voice_model_training.md`](docs/voice_model_training.md) for the dataset required |
-| Multimodal fusion (`src/ai_model/fusion/`) | Implemented and unit tested; contract documented in its README |
+| Multimodal fusion (`src/ai_model/fusion/`) | Implemented and unit tested; contract documented in its README. Agreement is reported as `not_applicable` when only one source is used |
 | Assessment API (`src/backend/assessment/`) | Implemented and integration tested locally |
-| Web UI (`src/frontend/`, served at `/app/`) | Implemented: consent, questionnaire, habits, voice record/upload, per-source results, suggestions, evaluation panel |
-| Azure (`src/azure/`) | Configuration, wrappers and templates exist and are tested **offline only**; **nothing has been deployed or run in Azure** |
+| Web UI (`src/frontend/`, served at `/app/`) | Implemented: consent, questionnaire, habits, voice record/upload, per-source results, readable factor names, suggestions tailored to the student's own inputs, opt-in history and trend, evaluation panel |
+| Optional free-tier Azure services (`src/cloud/`) | Speech-content voice signal (Azure AI Speech + Language F0), opt-in history via Event Grid -> Cosmos DB free tier, App Insights, optional Entra ID login and GitHub Actions CI/CD. Off unless configured; see [`docs/azure_free_services.md`](docs/azure_free_services.md) |
+| Azure (`src/azure/`) | Azure ML / Blob templates and wrappers, tested **offline only** and not used (they would cost money). The app itself is deployed on App Service F1 with `scripts/azure_free_deploy.py` |
 
 ## Zero-cost, fully local
 
@@ -201,9 +202,9 @@ The whole project runs on your own computer for ₹0: no Azure subscription, no 
 [`docs/zero_cost_local_mode.md`](docs/zero_cost_local_mode.md) for the Azure inventory, free local replacements, and
 what genuinely cannot be provided without a paid service (public hosting, autoscaling).
 
-**Optional free-tier hosting (prepared, not deployed):** [`docs/azure_free_tier_deployment.md`](docs/azure_free_tier_deployment.md)
+**Free-tier hosting (deployed on App Service F1):** [`docs/azure_free_tier_deployment.md`](docs/azure_free_tier_deployment.md)
 describes publishing the app on Azure App Service's free F1 plan (no credits used) with `scripts/package_for_azure.py` and
-`scripts/azure_free_deploy.py` (dry-run by default, F1-only, access-password protected). It was never run against real Azure.
+`scripts/azure_free_deploy.py` (dry-run by default, F1-only, access-password protected). The free add-on services (Speech, Language, Event Grid, Cosmos DB, App Insights, Entra ID, CI/CD) are set up with `scripts/azure_free_services.py`: see [`docs/azure_free_services.md`](docs/azure_free_services.md).
 
 ## Setup
 
@@ -303,7 +304,7 @@ trained on random synthetic features - they check wiring, not predictive quality
 
 ## Known limitations
 
-* The voice **stress-risk** modality has no trained model (no stress-labeled dataset). A separate CREMA-D acted-emotion model exists (`python -m src.ai_model.voice.train_emotion`); it is not a stress measure and is never fused; voice input is accepted but reported as `model_not_trained`. Once labeled data exists, train with `python -m src.ai_model.voice.train_voice --dataset-kind real_student` (see `docs/voice_model_training.md`). Models trained on `synthetic_demo` data are refused at inference.
+* The voice **stress-risk** modality has no trained model (no stress-labeled dataset). A separate CREMA-D acted-emotion model exists (`python -m src.ai_model.voice.train_emotion`); it is not a stress measure and is never fused; without Azure, voice input is reported as `model_not_trained`. When the free Azure AI Speech + Language services are configured and the student opts in, the *tone of what they said* is used as the voice input instead (a conservative, capped-confidence speech-content indicator, not an acoustic or clinical measure). Once labeled data exists, train with `python -m src.ai_model.voice.train_voice --dataset-kind real_student` (see `docs/voice_model_training.md`). Models trained on `synthetic_demo` data are refused at inference.
 * The behavioral model is trained on synthetic data; its near-perfect test accuracy reflects clean synthetic classes.
 * The questionnaire model was trained on 52 responses; generalisation is limited and nothing is clinically validated.
 * Behavioral input requires all five fields (values may be `null`); partial dicts are rejected as `invalid_input`.
