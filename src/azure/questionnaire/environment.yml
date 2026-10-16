@@ -1,0 +1,6 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: questionnaire-sklearn
+version: 1
+description: Azure ML environment; conda.yml is the authoritative dependency specification for the existing questionnaire pipeline.
+image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04:latest
+conda_file: conda.yml

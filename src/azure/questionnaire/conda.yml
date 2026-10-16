@@ -1,0 +1,15 @@
+name: questionnaire-sklearn
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - pandas==2.3.3
+      - numpy==2.4.2
+      - scikit-learn==1.8.0
+      - joblib==1.5.3
+      - matplotlib==3.10.8
+      # Required by Azure ML managed online endpoints when a custom conda
+      # environment is used (hosts score.py). Not yet verified in a real deployment.
+      - azureml-inference-server-http

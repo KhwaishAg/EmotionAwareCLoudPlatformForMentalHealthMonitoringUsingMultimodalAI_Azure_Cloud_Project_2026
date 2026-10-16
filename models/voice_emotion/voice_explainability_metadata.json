@@ -1,0 +1,46 @@
+{
+  "method": "random_forest_impurity_importance",
+  "top_features": [
+    {
+      "feature": "mfcc_3_mean",
+      "importance": 0.04654401125899412
+    },
+    {
+      "feature": "mfcc_1_std",
+      "importance": 0.039539892929468114
+    },
+    {
+      "feature": "mfcc_3_std",
+      "importance": 0.037658058122718524
+    },
+    {
+      "feature": "mfcc_5_mean",
+      "importance": 0.03407638367366012
+    },
+    {
+      "feature": "mfcc_4_std",
+      "importance": 0.03388670421234426
+    },
+    {
+      "feature": "pitch_mean",
+      "importance": 0.02981319453650097
+    },
+    {
+      "feature": "zero_crossing_rate_mean",
+      "importance": 0.028970273681153423
+    },
+    {
+      "feature": "mfcc_6_std",
+      "importance": 0.028694552412797916
+    },
+    {
+      "feature": "mfcc_8_mean",
+      "importance": 0.026603375399798422
+    },
+    {
+      "feature": "pitch_max",
+      "importance": 0.02618090688705287
+    }
+  ],
+  "note": "Model-associated importance only; not causal evidence."
+}

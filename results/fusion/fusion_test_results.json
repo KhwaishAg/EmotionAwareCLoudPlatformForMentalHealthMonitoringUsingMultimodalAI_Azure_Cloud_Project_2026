@@ -1,0 +1,527 @@
+{
+  "integration_test_only": true,
+  "notice": "Mock voice and behavioral results are test fixtures, not model outputs or research results.",
+  "tests": [
+    {
+      "test": "Questionnaire only",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.6412898858957027,
+        "risk_level": "moderate",
+        "confidence": 0.3724721161640166,
+        "available_features": 66,
+        "total_features": 75,
+        "data_quality": {
+          "missing_features": 9,
+          "completeness": 0.88
+        },
+        "key_factors": [
+          {
+            "modality": "questionnaire",
+            "feature": "stress_impact_dimension",
+            "contribution": 1.0,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "overwhelm_dimension",
+            "contribution": 0.941043239870837,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "Q9_encoded",
+            "contribution": 0.9055974766741504,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "Q12_encoded",
+            "contribution": 0.7379882056378312,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "stress_behavior_dimension",
+            "contribution": 0.6309078154412617,
+            "direction": "increases_risk"
+          }
+        ],
+        "modalities_used": [
+          "questionnaire"
+        ],
+        "modality_scores": {
+          "questionnaire": 0.6412898858957027
+        },
+        "modality_confidences": {
+          "questionnaire": 0.3724721161640166
+        },
+        "modality_weights": {
+          "questionnaire": 0.3277754622243346
+        },
+        "normalized_weights": {
+          "questionnaire": 1.0
+        },
+        "agreement": {
+          "score": 1.0,
+          "level": "high"
+        },
+        "status": "available"
+      }
+    },
+    {
+      "test": "Questionnaire + Voice",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.6933417047245967,
+        "risk_level": "high",
+        "confidence": 0.6294152983797928,
+        "available_features": 74,
+        "total_features": 85,
+        "data_quality": {
+          "missing_features": 11,
+          "completeness": 0.8705882352941177
+        },
+        "key_factors": [
+          {
+            "modality": "voice",
+            "feature": "stress_related_prosody",
+            "contribution": 0.5290483381581297,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "stress_impact_dimension",
+            "contribution": 0.3386895773023379,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "overwhelm_dimension",
+            "contribution": 0.3187215371350764,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "Q9_encoded",
+            "contribution": 0.3067164265808318,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "Q12_encoded",
+            "contribution": 0.24994891342158787,
+            "direction": "model_associated"
+          }
+        ],
+        "modalities_used": [
+          "questionnaire",
+          "voice"
+        ],
+        "modality_scores": {
+          "questionnaire": 0.6412898858957027,
+          "voice": 0.72
+        },
+        "modality_confidences": {
+          "questionnaire": 0.3724721161640166,
+          "voice": 0.8
+        },
+        "modality_weights": {
+          "questionnaire": 0.3277754622243346,
+          "voice": 0.6400000000000001
+        },
+        "normalized_weights": {
+          "questionnaire": 0.3386895773023379,
+          "voice": 0.661310422697662
+        },
+        "agreement": {
+          "score": 0.9212898858957027,
+          "level": "high"
+        },
+        "status": "available"
+      }
+    },
+    {
+      "test": "Questionnaire + Behavior",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.6026288307505218,
+        "risk_level": "moderate",
+        "confidence": 0.5613277993338197,
+        "available_features": 74,
+        "total_features": 85,
+        "data_quality": {
+          "missing_features": 11,
+          "completeness": 0.8705882352941177
+        },
+        "key_factors": [
+          {
+            "modality": "questionnaire,behavioral",
+            "feature": "stress_behavior_dimension",
+            "contribution": 0.7375694966682267,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "stress_impact_dimension",
+            "contribution": 0.36920986912962017,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "overwhelm_dimension",
+            "contribution": 0.3474424514380255,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "Q9_encoded",
+            "contribution": 0.3343555258469773,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "Q12_encoded",
+            "contribution": 0.27247252882274686,
+            "direction": "model_associated"
+          }
+        ],
+        "modalities_used": [
+          "questionnaire",
+          "behavioral"
+        ],
+        "modality_scores": {
+          "questionnaire": 0.6412898858957027,
+          "behavioral": 0.58
+        },
+        "modality_confidences": {
+          "questionnaire": 0.3724721161640166,
+          "behavioral": 0.7
+        },
+        "modality_weights": {
+          "questionnaire": 0.3277754622243346,
+          "behavioral": 0.5599999999999999
+        },
+        "normalized_weights": {
+          "questionnaire": 0.36920986912962017,
+          "behavioral": 0.6307901308703798
+        },
+        "agreement": {
+          "score": 0.9387101141042973,
+          "level": "high"
+        },
+        "status": "available"
+      }
+    },
+    {
+      "test": "All modalities",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.6517967550803838,
+        "risk_level": "moderate",
+        "confidence": 0.624608221714142,
+        "available_features": 82,
+        "total_features": 95,
+        "data_quality": {
+          "missing_features": 13,
+          "completeness": 0.8631578947368421
+        },
+        "key_factors": [
+          {
+            "modality": "questionnaire,behavioral",
+            "feature": "stress_behavior_dimension",
+            "contribution": 0.4285944610432918,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "voice",
+            "feature": "stress_related_prosody",
+            "contribution": 0.3351277806586603,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "stress_impact_dimension",
+            "contribution": 0.21454426408126517,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "overwhelm_dimension",
+            "contribution": 0.20189542936673824,
+            "direction": "increases_risk"
+          },
+          {
+            "modality": "questionnaire",
+            "feature": "Q9_encoded",
+            "contribution": 0.19429074418690628,
+            "direction": "model_associated"
+          }
+        ],
+        "modalities_used": [
+          "questionnaire",
+          "voice",
+          "behavioral"
+        ],
+        "modality_scores": {
+          "questionnaire": 0.6412898858957027,
+          "voice": 0.72,
+          "behavioral": 0.58
+        },
+        "modality_confidences": {
+          "questionnaire": 0.3724721161640166,
+          "voice": 0.8,
+          "behavioral": 0.7
+        },
+        "modality_weights": {
+          "questionnaire": 0.3277754622243346,
+          "voice": 0.6400000000000001,
+          "behavioral": 0.5599999999999999
+        },
+        "normalized_weights": {
+          "questionnaire": 0.21454426408126517,
+          "voice": 0.4189097258233253,
+          "behavioral": 0.36654601009540955
+        },
+        "agreement": {
+          "score": 0.86,
+          "level": "high"
+        },
+        "status": "available"
+      }
+    },
+    {
+      "test": "Voice only",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.72,
+        "risk_level": "high",
+        "confidence": 0.8,
+        "available_features": 8,
+        "total_features": 10,
+        "data_quality": {
+          "missing_features": 2,
+          "completeness": 0.8
+        },
+        "key_factors": [
+          {
+            "modality": "voice",
+            "feature": "stress_related_prosody",
+            "contribution": 0.8,
+            "direction": "model_associated"
+          }
+        ],
+        "modalities_used": [
+          "voice"
+        ],
+        "modality_scores": {
+          "voice": 0.72
+        },
+        "modality_confidences": {
+          "voice": 0.8
+        },
+        "modality_weights": {
+          "voice": 0.6400000000000001
+        },
+        "normalized_weights": {
+          "voice": 1.0
+        },
+        "agreement": {
+          "score": 1.0,
+          "level": "high"
+        },
+        "status": "available"
+      }
+    },
+    {
+      "test": "Behavior only",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.58,
+        "risk_level": "moderate",
+        "confidence": 0.7,
+        "available_features": 8,
+        "total_features": 10,
+        "data_quality": {
+          "missing_features": 2,
+          "completeness": 0.8
+        },
+        "key_factors": [
+          {
+            "modality": "behavioral",
+            "feature": "stress_behavior_dimension",
+            "contribution": 0.8,
+            "direction": "model_associated"
+          }
+        ],
+        "modalities_used": [
+          "behavioral"
+        ],
+        "modality_scores": {
+          "behavioral": 0.58
+        },
+        "modality_confidences": {
+          "behavioral": 0.7
+        },
+        "modality_weights": {
+          "behavioral": 0.5599999999999999
+        },
+        "normalized_weights": {
+          "behavioral": 1.0
+        },
+        "agreement": {
+          "score": 1.0,
+          "level": "high"
+        },
+        "status": "available"
+      }
+    },
+    {
+      "test": "No modalities",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": null,
+        "risk_level": null,
+        "confidence": 0.0,
+        "available_features": 0,
+        "total_features": 0,
+        "data_quality": {
+          "missing_features": 0,
+          "completeness": 0.0
+        },
+        "key_factors": [],
+        "modalities_used": [],
+        "modality_scores": {},
+        "modality_confidences": {},
+        "modality_weights": {},
+        "normalized_weights": {},
+        "agreement": {
+          "score": 0.0,
+          "level": "low"
+        },
+        "status": "fusion_unavailable"
+      }
+    },
+    {
+      "test": "Malformed input",
+      "status": "PASS"
+    },
+    {
+      "test": "High disagreement",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.5,
+        "risk_level": "moderate",
+        "confidence": 0.49500000000000005,
+        "available_features": 16,
+        "total_features": 20,
+        "data_quality": {
+          "missing_features": 4,
+          "completeness": 0.8
+        },
+        "key_factors": [
+          {
+            "modality": "voice",
+            "feature": "a",
+            "contribution": 0.4,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "behavioral",
+            "feature": "b",
+            "contribution": 0.4,
+            "direction": "model_associated"
+          }
+        ],
+        "modalities_used": [
+          "voice",
+          "behavioral"
+        ],
+        "modality_scores": {
+          "voice": 0.05,
+          "behavioral": 0.95
+        },
+        "modality_confidences": {
+          "voice": 0.9,
+          "behavioral": 0.9
+        },
+        "modality_weights": {
+          "voice": 0.7200000000000001,
+          "behavioral": 0.7200000000000001
+        },
+        "normalized_weights": {
+          "voice": 0.5,
+          "behavioral": 0.5
+        },
+        "agreement": {
+          "score": 0.10000000000000009,
+          "level": "low"
+        },
+        "status": "available"
+      }
+    },
+    {
+      "test": "High agreement",
+      "status": "PASS",
+      "result": {
+        "modality": "multimodal_fusion",
+        "risk_score": 0.61,
+        "risk_level": "moderate",
+        "confidence": 0.891,
+        "available_features": 16,
+        "total_features": 20,
+        "data_quality": {
+          "missing_features": 4,
+          "completeness": 0.8
+        },
+        "key_factors": [
+          {
+            "modality": "voice",
+            "feature": "a",
+            "contribution": 0.4,
+            "direction": "model_associated"
+          },
+          {
+            "modality": "behavioral",
+            "feature": "b",
+            "contribution": 0.4,
+            "direction": "model_associated"
+          }
+        ],
+        "modalities_used": [
+          "voice",
+          "behavioral"
+        ],
+        "modality_scores": {
+          "voice": 0.6,
+          "behavioral": 0.62
+        },
+        "modality_confidences": {
+          "voice": 0.9,
+          "behavioral": 0.9
+        },
+        "modality_weights": {
+          "voice": 0.7200000000000001,
+          "behavioral": 0.7200000000000001
+        },
+        "normalized_weights": {
+          "voice": 0.5,
+          "behavioral": 0.5
+        },
+        "agreement": {
+          "score": 0.98,
+          "level": "high"
+        },
+        "status": "available"
+      }
+    }
+  ]
+}

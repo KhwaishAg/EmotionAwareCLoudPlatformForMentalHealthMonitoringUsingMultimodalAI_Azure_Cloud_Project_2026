@@ -1,0 +1,26 @@
+# Configuration template only. Azure execution has NOT been performed.
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+display_name: questionnaire-training
+experiment_name: questionnaire-training
+# Repository-root code snapshot. `train.py` is the Azure ML adapter around the
+# existing local methodology; it does not duplicate the training algorithm.
+code: ../../..
+command: >-
+  python src/azure/questionnaire/train.py
+  --data ${{inputs.questionnaire_training_data}}
+  --output-dir ${{outputs.model_artifacts}}
+environment: azureml:questionnaire-sklearn:1
+compute: azureml:<questionnaire-compute-cluster-name>
+# The Azure adapter consumes this approved private data asset. The local
+# train_models.py remains unchanged and is invoked only through that adapter.
+inputs:
+  questionnaire_training_data:
+    type: uri_folder
+    path: azureml:<private-questionnaire-data-asset>@latest
+    mode: ro_mount
+outputs:
+  model_artifacts:
+    type: uri_folder
+    mode: rw_mount
+    path: azureml://datastores/<artifact-datastore-name>/paths/questionnaire/${{name}}/models

@@ -5,8 +5,11 @@
 This document specifies the planned backend architecture, endpoint definitions, and assessment orchestration workflows for the **Multimodal Student Stress/Risk Assessment and Early-Intervention Support System**.
 
 > [!IMPORTANT]
-> **Implementation Status: Planned**
-> The endpoints, schemas, and services described herein are architectural specifications. No backend source code, server scripts, or live endpoints have been implemented in this documentation pass.
+> **Implementation Status: Implemented (local), Azure deployment not performed**
+> The unified assessment API lives in `src/backend/assessment/api.py` (FastAPI): `POST /assessment`, `GET /health`,
+> `GET /status`, `GET /schema`, plus the bundled web UI at `/app/`. A separate questionnaire-only API is in
+> `src/backend/questionnaire/api.py`. See the root `README.md` for startup and sample requests. The remaining
+> sections below are the original design notes.
 
 ---
 

@@ -1,0 +1,270 @@
+{
+  "task": "emotion_recognition",
+  "dataset_kind": "public_acted",
+  "synthetic_data": false,
+  "model_name": "voice_emotion_random_forest",
+  "model_type": "random_forest",
+  "classes": [
+    "angry",
+    "disgust",
+    "fearful",
+    "happy",
+    "neutral",
+    "sad"
+  ],
+  "feature_count": 41,
+  "dataset_fingerprint_sha256": "1460f48a845b7b1f5f050fad999ac70deee1d460e555702b2aa8f3e04b700dbd",
+  "random_seed": 42,
+  "split": {
+    "method": "stratified_group_kfold_by_participant",
+    "test_size_requested": 0.2,
+    "train": {
+      "recordings": 5973,
+      "participants": 73,
+      "recordings_per_class": {
+        "angry": 1020,
+        "disgust": 1020,
+        "fearful": 1020,
+        "happy": 1020,
+        "neutral": 873,
+        "sad": 1020
+      },
+      "participants_per_class": {
+        "angry": 73,
+        "disgust": 73,
+        "fearful": 73,
+        "happy": 73,
+        "neutral": 73,
+        "sad": 73
+      }
+    },
+    "held_out_test": {
+      "recordings": 1469,
+      "participants": 18,
+      "recordings_per_class": {
+        "angry": 251,
+        "disgust": 251,
+        "fearful": 251,
+        "happy": 251,
+        "neutral": 214,
+        "sad": 251
+      },
+      "participants_per_class": {
+        "angry": 18,
+        "disgust": 18,
+        "fearful": 18,
+        "happy": 18,
+        "neutral": 18,
+        "sad": 18
+      }
+    }
+  },
+  "cross_validation_on_train": {
+    "folds": 5,
+    "macro_f1_mean": 0.46662878899647814,
+    "macro_f1_std": 0.0071181607102085405,
+    "macro_f1_per_fold": [
+      0.4567302554293895,
+      0.47714163091843376,
+      0.46925164709528683,
+      0.46096537947571337,
+      0.4690550320635675
+    ]
+  },
+  "held_out_metrics": {
+    "accuracy": 0.48127978216473793,
+    "precision": 0.48736254210260066,
+    "recall": 0.48196931898573925,
+    "f1": 0.4679752584722641,
+    "macro_f1": 0.4679752584722641,
+    "macro_precision": 0.48736254210260066,
+    "macro_recall": 0.48196931898573925,
+    "weighted_f1": 0.4680046226351891,
+    "weighted_precision": 0.4887864376746535,
+    "weighted_recall": 0.48127978216473793,
+    "support": 1469,
+    "classes": [
+      "angry",
+      "disgust",
+      "fearful",
+      "happy",
+      "neutral",
+      "sad"
+    ],
+    "per_class": {
+      "angry": {
+        "precision": 0.5035971223021583,
+        "recall": 0.8366533864541833,
+        "f1": 0.6287425149700598,
+        "support": 251
+      },
+      "disgust": {
+        "precision": 0.3713235294117647,
+        "recall": 0.40239043824701193,
+        "f1": 0.3862332695984704,
+        "support": 251
+      },
+      "fearful": {
+        "precision": 0.5597014925373134,
+        "recall": 0.29880478087649404,
+        "f1": 0.38961038961038963,
+        "support": 251
+      },
+      "happy": {
+        "precision": 0.44508670520231214,
+        "recall": 0.30677290836653387,
+        "f1": 0.3632075471698113,
+        "support": 251
+      },
+      "neutral": {
+        "precision": 0.4308300395256917,
+        "recall": 0.5093457943925234,
+        "f1": 0.4668094218415418,
+        "support": 214
+      },
+      "sad": {
+        "precision": 0.6136363636363636,
+        "recall": 0.5378486055776892,
+        "f1": 0.5732484076433121,
+        "support": 251
+      }
+    },
+    "confusion_matrix": {
+      "matrix": [
+        [
+          210,
+          15,
+          6,
+          17,
+          3,
+          0
+        ],
+        [
+          46,
+          101,
+          11,
+          24,
+          48,
+          21
+        ],
+        [
+          41,
+          29,
+          75,
+          25,
+          39,
+          42
+        ],
+        [
+          94,
+          39,
+          13,
+          77,
+          19,
+          9
+        ],
+        [
+          19,
+          52,
+          5,
+          16,
+          109,
+          13
+        ],
+        [
+          7,
+          36,
+          24,
+          14,
+          35,
+          135
+        ]
+      ],
+      "labels": [
+        "angry",
+        "disgust",
+        "fearful",
+        "happy",
+        "neutral",
+        "sad"
+      ],
+      "normalized_matrix": [
+        [
+          0.8366533864541833,
+          0.05976095617529881,
+          0.02390438247011952,
+          0.06772908366533864,
+          0.01195219123505976,
+          0.0
+        ],
+        [
+          0.18326693227091634,
+          0.40239043824701193,
+          0.043824701195219126,
+          0.09561752988047809,
+          0.19123505976095617,
+          0.08366533864541832
+        ],
+        [
+          0.16334661354581673,
+          0.11553784860557768,
+          0.29880478087649404,
+          0.099601593625498,
+          0.1553784860557769,
+          0.16733067729083664
+        ],
+        [
+          0.3745019920318725,
+          0.1553784860557769,
+          0.05179282868525897,
+          0.30677290836653387,
+          0.07569721115537849,
+          0.035856573705179286
+        ],
+        [
+          0.08878504672897196,
+          0.24299065420560748,
+          0.02336448598130841,
+          0.07476635514018691,
+          0.5093457943925234,
+          0.06074766355140187
+        ],
+        [
+          0.027888446215139442,
+          0.14342629482071714,
+          0.09561752988047809,
+          0.055776892430278883,
+          0.1394422310756972,
+          0.5378486055776892
+        ]
+      ],
+      "total_samples": 1469,
+      "correct_predictions": 707,
+      "accuracy": 0.48127978216473793
+    }
+  },
+  "trained_at_utc": "2026-10-16T07:48:47+00:00",
+  "environment": {
+    "python": "3.13.5",
+    "scikit_learn": "1.8.0",
+    "numpy": "2.4.2",
+    "pandas": "2.3.3"
+  },
+  "disclaimer": "Metrics describe performance on the supplied dataset only. They are not evidence of clinical validity or of real-world accuracy. Non-clinical research tool.",
+  "dataset": {
+    "name": "CREMA-D",
+    "citation": "Cao et al. 2014, CREMA-D: Crowd-sourced Emotional Multimodal Actors Dataset, IEEE Trans. Affective Computing",
+    "license": "Open Database License (ODbL)",
+    "nature": "acted emotional speech by 91 professional actors reading 12 fixed sentences",
+    "limitations": [
+      "Acted speech, not spontaneous speech and not students.",
+      "Labels are the intended acted emotion, not measured stress or mental state.",
+      "The six emotion classes are never mapped to stress-risk labels."
+    ],
+    "clips_used": 7442,
+    "clips_failed_extraction": 0,
+    "audio_config": {
+      "min_duration_seconds": 1.0
+    }
+  }
+}

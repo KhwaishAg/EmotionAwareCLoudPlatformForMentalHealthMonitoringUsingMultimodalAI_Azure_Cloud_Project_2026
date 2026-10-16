@@ -1,0 +1,7 @@
+# OPTIONAL - only for developers who later choose to deploy to Azure. NOT needed to run, test or demo the
+# project locally, and installing these SDKs does not create any cloud resource or cost (pip packages are free).
+# Using them against a real subscription can incur charges; see docs/azure_deployment_runbook.md.
+-r requirements.txt
+azure-storage-blob>=12.19.0    # Blob Storage client (src/azure/storage.py)
+azure-ai-ml>=1.15.0            # Azure ML SDK v2 (src/azure/ml_training.py)
+azure-identity>=1.15.0         # Entra ID / managed identity auth

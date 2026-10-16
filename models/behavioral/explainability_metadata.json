@@ -1,0 +1,24 @@
+{
+  "top_features": [
+    {
+      "feature": "B4_screen_time_hours",
+      "importance": 1.7724744282827098
+    },
+    {
+      "feature": "B2_study_consistency",
+      "importance": 1.5018774422107437
+    },
+    {
+      "feature": "B1_sleep_hours",
+      "importance": 1.4357669701467914
+    },
+    {
+      "feature": "B5_routine_irregularity",
+      "importance": 1.366701318905272
+    },
+    {
+      "feature": "B3_social_activity_freq",
+      "importance": 1.2281700806059535
+    }
+  ]
+}

@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="A student stress check-in that combines a questionnaire, daily habits and an optional voice recording. Research demonstration; runs locally and stores nothing.">
+<title>Emotion-Aware: student stress check-in</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#assess">Skip to the check-in</a>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top">Emotion-Aware</a>
+    <nav class="links" aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#assess">Check-in</a>
+      <a href="#transparency">Evaluation</a>
+    </nav>
+    <button type="button" id="theme" class="btn btn-secondary btn-sm" aria-label="Switch between light and dark theme">Dark theme</button>
+  </div>
+</header>
+
+<main id="top">
+  <section class="intro">
+    <div class="wrap intro-grid">
+      <div>
+        <h1>Student stress check-in</h1>
+        <p class="lead">Answer a 20-question survey and five questions about your daily habits, and optionally add a short voice recording. The tool turns what it can use into a low, moderate or high stress indicator, shows which of your own answers pointed to it, and suggests specific next steps.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#assess">Start the check-in</a>
+          <a class="btn btn-secondary" href="#how">How it works</a>
+        </div>
+        <p class="fine">Research demonstration. It is not a medical test, and it runs on this computer without storing your answers.</p>
+      </div>
+      <aside class="asked" aria-labelledby="asked-title">
+        <h2 id="asked-title">What you will be asked</h2>
+        <dl>
+          <div><dt>Questionnaire</dt><dd>20 questions about the past week: workload, concentration, sleep, mood and how you cope.</dd></div>
+          <div><dt>Daily habits</dt><dd>5 numbers: sleep, study routine, social time, screen time and routine regularity.</dd></div>
+          <div><dt>Voice (optional)</dt><dd>A recording of at least 5 seconds, or a WAV file.</dd></div>
+        </dl>
+      </aside>
+    </div>
+  </section>
+
+  <section class="section" id="how">
+    <div class="wrap">
+      <h2>How the result is produced</h2>
+      <p class="muted">Each source is scored by its own model. The scores are then combined, weighting each one by its confidence and how complete its data is. A source that is missing or fails is left out and reported as such; it is never guessed.</p>
+      <div class="steps3">
+        <div class="how"><h3><span class="num">1.</span>Questionnaire</h3><p>A random forest trained on a small set of real survey responses. Its results are preliminary.</p></div>
+        <div class="how"><h3><span class="num">2.</span>Daily habits</h3><p>A logistic regression trained on synthetic data. Treat its scores as a demonstration, not as evidence.</p></div>
+        <div class="how"><h3><span class="num">3.</span>Voice</h3><p>There is no voice stress model, because no stress-labelled recordings exist. A separate, experimental read-out of acted emotions may appear. It is not a stress measure and is not used in the result.</p></div>
+      </div>
+      <p class="how-note">With two or more sources, the tool also compares them. If the questionnaire is noticeably lower than your daily habits, it flags a possible masked-stress pattern as something to reflect on. Accuracy figures for every model are under Evaluation, below.</p>
+    </div>
+  </section>
+
+  <section class="section" id="assess">
+    <div class="wrap">
+      <h2>Check-in</h2>
+      <p class="muted">Every part is optional, and you can go back at any time.</p>
+
+      <form id="form" class="panel" novalidate>
+        <div class="panel-head">
+          <ol class="stepper" id="stepper">
+            <li class="active" data-step="1"><span>Consent</span></li>
+            <li data-step="2"><span>Questionnaire</span></li>
+            <li data-step="3"><span>Daily habits</span></li>
+            <li data-step="4"><span>Voice</span></li>
+          </ol>
+        </div>
+
+        <div class="panel-body">
+          <div class="step active" data-step="1">
+            <h3>Consent and privacy</h3>
+            <p class="muted">What happens with your answers.</p>
+            <div class="notice" role="note"><strong>Not a medical tool.</strong> This is a non-clinical research and early-intervention demonstration. It does not diagnose any condition and does not replace a counsellor, psychologist or doctor. If you are struggling or feel unsafe, please contact your campus counselling service or a local helpline.</div>
+            <ul class="checklist">
+              <li>Everything is optional: share only what you are comfortable with.</li>
+              <li id="privacy-where">Your answers go only to the assessment service running on this computer to compute the result, and are <strong>not stored</strong><span id="privacy-tail">. Nothing is saved by this page, and results are not cached by the browser.</span></li>
+              <li>A voice recording is held in memory in your browser, sent once, analysed from a temporary file that is deleted immediately, and never kept.</li>
+              <li id="cloud-speech-note" hidden>If you tick &ldquo;Analyse what I say&rdquo;, your recording is also sent to Microsoft Azure AI Speech to be turned into text, and that text to Azure AI Language to estimate its tone. Neither the audio nor the text is stored by this app.</li>
+              <li id="history-note" hidden>If you tick &ldquo;Save to my history&rdquo;, an anonymised summary (date, scores, levels and factor names; never your answers, habits, voice or transcript) is stored in Azure Cosmos DB under a random ID kept in this browser. It is deleted automatically after 180 days, or straight away with &ldquo;Delete my history&rdquo;.</li>
+              <li>Results come from small, experimental models (see Evaluation below).</li>
+            </ul>
+            <label class="consent-box"><input type="checkbox" id="consent"><span>I understand this is a non-clinical demonstration and I consent to my answers being processed.</span></label>
+          </div>
+
+          <div class="step" data-step="2">
+            <h3>Questionnaire</h3>
+            <p class="muted">Twenty short questions. Think about the past week or so.</p>
+            <label class="toggle-row"><input type="checkbox" id="use-q" checked><span>Include the questionnaire</span></label>
+            <div id="q-wrap">
+              <div class="q-meta"><span id="q-count">0 of 20 answered</span><div class="bar" aria-hidden="true"><span id="q-progress"></span></div></div>
+              <div id="q-container" class="q-grid muted">Loading questions...</div>
+            </div>
+          </div>
+
+          <div class="step" data-step="3">
+            <h3>Daily habits</h3>
+            <p class="muted">Five numbers about your usual routine.</p>
+            <label class="toggle-row"><input type="checkbox" id="use-b" checked><span>Include daily habits</span></label>
+            <div id="b-container" class="habit-grid"></div>
+          </div>
+
+          <div class="step" data-step="4">
+            <h3>Voice (optional)</h3>
+            <p class="muted">Speak for 30 to 60 seconds about your recent academic workload and how you have been feeling (at least 5 seconds), or upload a WAV file. <span id="voice-help">Voice only adds to the result when a trained voice stress model is installed. Otherwise it is reported as unavailable, and a separate experimental emotion read-out may appear.</span></p>
+            <label class="toggle-row" id="cloud-speech-opt" hidden><input type="checkbox" id="use-cloud-speech"><span>Analyse what I say with Azure AI Speech and Language (audio and text are sent to Microsoft Azure for this check-in only)</span></label>
+            <div class="voice-box">
+              <div class="voice-row">
+                <button type="button" id="rec-start" class="btn btn-secondary">Start recording</button>
+                <button type="button" id="rec-stop" class="btn btn-secondary" hidden>Stop recording</button>
+                <button type="button" id="rec-clear" class="btn btn-text btn-sm" hidden>Remove voice input</button>
+              </div>
+              <p class="muted small" id="rec-status" aria-live="polite">No recording yet.</p>
+              <div class="file-pick">
+                <p class="small muted">Or choose a WAV file instead:</p>
+                <input type="file" id="voice-file" accept=".wav,audio/wav,audio/x-wav" aria-label="Upload a WAV recording">
+              </div>
+            </div>
+            <label class="toggle-row" id="history-opt" hidden><input type="checkbox" id="save-history"><span>Save an anonymised summary to my history so I can see my trend over time</span></label>
+          </div>
+        </div>
+
+        <div id="error" class="error" role="alert" hidden></div>
+
+        <div class="panel-foot">
+          <button type="button" id="prev" class="btn btn-text" hidden>Back</button>
+          <span class="muted small" id="loading" hidden>Analysing...</span>
+          <span id="spacer"></span>
+          <button type="button" id="next" class="btn btn-primary" disabled>Continue</button>
+          <button type="submit" id="submit" class="btn btn-primary" hidden disabled>Get my result</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section class="results" id="result" hidden aria-live="polite">
+    <div class="wrap">
+      <h2>Your result</h2>
+
+      <div class="card summary" id="r-summary-card">
+        <div class="summary-top"><h3 id="r-title"></h3><span id="r-level" class="tag"></span></div>
+        <p class="muted" id="r-score-text"></p>
+        <div class="scale" id="r-scale" aria-hidden="true"><i></i><i></i><i></i><b id="r-marker"></b></div>
+        <div class="scale-labels" aria-hidden="true"><span>Low</span><span>Moderate</span><span>High</span></div>
+        <dl class="facts">
+          <div><dt>Confidence</dt><dd id="r-confidence"></dd></div>
+          <div><dt>Agreement between sources</dt><dd id="r-agreement"></dd></div>
+          <div><dt>Data completeness</dt><dd id="r-completeness"></dd></div>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h3>By source</h3>
+        <p class="muted">Each source is scored separately, then combined.</p>
+        <div id="r-cards" class="sources"></div>
+      </div>
+
+      <div id="r-consistency" class="callout" hidden>
+        <h3>Do your sources agree?</h3>
+        <p id="r-consistency-body"></p>
+      </div>
+
+      <div id="r-emotion" class="callout" hidden>
+        <h3>Vocal emotion (experimental, separate from the stress result)</h3>
+        <p id="r-emotion-body"></p>
+        <p class="small">Recognises <em>acted</em> emotion categories from speech. It is not a measure of stress or mental health, is not used in the overall result above, and has not been validated on real student speech.</p>
+      </div>
+
+      <div class="card">
+        <h3>What stood out in your answers</h3>
+        <p class="muted">Areas where your own answers pointed to strain.</p>
+        <ul id="r-insights" class="insight-list"></ul>
+        <p class="muted" id="r-insights-empty" hidden>Nothing in your answers stood out as a clear stress signal.</p>
+      </div>
+
+      <div class="card">
+        <h3>Suggestions for you</h3>
+        <p class="muted">Chosen from your own answers and what the model relies on most. General self-care ideas, not clinical advice.</p>
+        <div id="r-advice" class="recs"></div>
+      </div>
+
+      <details class="card">
+        <summary>What the model relies on most (the same for everyone)</summary>
+        <div class="table-wrap">
+          <table><thead><tr><th>Factor</th><th>From</th><th>Effect</th><th>Weight</th></tr></thead><tbody id="r-factors"></tbody></table>
+        </div>
+        <p class="muted small">These are model-wide associations, not causes, and not specific to you.</p>
+      </details>
+
+      <p class="disclaimer" id="r-disclaimer"></p>
+      <a class="btn btn-secondary" href="#assess">Start a new check-in</a>
+    </div>
+  </section>
+
+  <section class="history" id="history-card" hidden>
+    <div class="wrap">
+      <div class="card">
+        <h3>My history</h3>
+        <p class="muted" id="h-trend">Your saved check-ins appear here.</p>
+        <div class="table-wrap">
+          <table><thead><tr><th>Date</th><th>Level</th><th>Score</th><th>Sources</th></tr></thead><tbody id="h-rows"></tbody></table>
+        </div>
+        <div class="voice-row">
+          <button type="button" id="h-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+          <button type="button" id="h-delete" class="btn btn-secondary btn-sm">Delete my history</button>
+          <span id="h-status" class="muted small" aria-live="polite"></span>
+        </div>
+        <p class="muted small" id="h-id-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="transparency" id="transparency">
+    <div class="wrap">
+      <details class="card" id="eval-panel">
+        <summary>Evaluation: how these models were tested</summary>
+        <div id="eval-body" class="muted">Loading...</div>
+      </details>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <strong>Emotion-Aware</strong>
+    <p>Experimental research demonstration. Not a medical tool: it cannot diagnose or treat any condition or replace professional care. It runs on your computer and your answers are not stored.</p>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
