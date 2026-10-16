@@ -104,7 +104,14 @@ def teardown_commands(plan: Plan) -> List[List[str]]:
     return [["az", "group", "delete", "--name", plan.resource_group, "--yes", "--subscription", plan.subscription]]
 
 
-def verify_plan_is_free(plan: Plan, run=subprocess.run) -> None:
+def _run(command, **kwargs):
+    """subprocess.run that resolves `az` to its full path (az.cmd on Windows)."""
+    if command and command[0] == "az":
+        command = [shutil.which("az") or "az", *command[1:]]
+    return subprocess.run(command, **kwargs)
+
+
+def verify_plan_is_free(plan: Plan, run=_run) -> None:
     """After creation: read the plan back and fail loudly (so you can tear down) if it is not F1."""
     done = run(["az", "appservice", "plan", "show", "--name", plan.plan_name, "--resource-group", plan.resource_group,
                 "--subscription", plan.subscription, "--query", "sku.name", "-o", "tsv"],
@@ -113,11 +120,11 @@ def verify_plan_is_free(plan: Plan, run=subprocess.run) -> None:
         raise RuntimeError(f"Plan SKU is {done.stdout.strip()!r}, expected {ALLOWED_SKU!r}. Run with --teardown --execute now.")
 
 
-def _az(args: List[str], run=subprocess.run) -> str:
+def _az(args: List[str], run=_run) -> str:
     return run(["az", *args], capture_output=True, text=True, check=True).stdout.strip()
 
 
-def preflight(plan: Plan, run=subprocess.run) -> None:
+def preflight(plan: Plan, run=_run) -> None:
     if shutil.which("az") is None:
         raise RuntimeError("Azure CLI ('az') is not installed. Install it and run 'az login' first.")
     account = json.loads(_az(["account", "show", "-o", "json"], run))
@@ -134,7 +141,7 @@ def preflight(plan: Plan, run=subprocess.run) -> None:
         raise RuntimeError(f"Resource group {plan.resource_group!r} already exists; refusing to modify it.")
 
 
-def execute(plan: Plan, run=subprocess.run) -> str:
+def execute(plan: Plan, run=_run) -> str:
     preflight(plan, run)
     password = os.environ.get("DEPLOY_APP_PASSWORD")
     if not password or len(password) < 12:
@@ -188,7 +195,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if preflight_account.get("name") != plan.subscription:
                 raise RuntimeError("Signed-in subscription does not match --subscription.")
             for command in commands:
-                subprocess.run(command, check=True)
+                _run(command, check=True)
             print("Resource group deleted.")
         else:
             print("Site URL: " + execute(plan))
