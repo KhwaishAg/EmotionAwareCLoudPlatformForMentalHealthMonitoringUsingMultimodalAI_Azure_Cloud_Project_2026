@@ -22,10 +22,16 @@
       <h2>Consent &amp; privacy</h2>
       <ul class="muted">
         <li>Everything is optional &mdash; share only what you are comfortable with.</li>
-        <li>Your answers are sent to the assessment service running on this computer, used to compute the result,
-          and <strong>not stored</strong>. Nothing is saved by this page, and results are not cached by the browser.</li>
+        <li id="privacy-where">Your answers are sent to this app's assessment service, used to compute the result,
+          and <strong>not stored</strong> unless you choose to save a summary below. Results are not cached by the browser.</li>
         <li>A voice recording is held in memory in your browser, sent once, analysed from a temporary file that is
-          deleted immediately, and never kept. Nothing is uploaded to any external service.</li>
+          deleted immediately, and never kept.</li>
+        <li id="cloud-speech-note" hidden>If you tick &ldquo;Analyse what I say&rdquo;, your recording is also sent to
+          Microsoft Azure AI Speech to be turned into text, and that text to Azure AI Language to estimate its tone.
+          Neither the audio nor the text is stored by this app.</li>
+        <li id="history-note" hidden>If you tick &ldquo;Save to my history&rdquo;, an anonymised summary (date, scores,
+          levels and factor names &mdash; never your answers, habits, voice or transcript) is stored in Azure Cosmos DB under a
+          random ID kept in this browser. It is deleted automatically after 180 days, or straight away with &ldquo;Delete my history&rdquo;.</li>
         <li>Results are indicators from small, experimental models (see &ldquo;How these models were evaluated&rdquo;).</li>
       </ul>
       <label><input type="checkbox" id="consent"> I understand this is a non-clinical demonstration and I consent to my answers being processed.</label>
@@ -46,8 +52,10 @@
     <section class="card">
       <h2>3. Voice <span class="muted">(optional)</span></h2>
       <p class="muted">Speak for 30&ndash;60 seconds about your recent academic workload and how you have been feeling
-        (at least 5 seconds), or upload a WAV file. Voice only contributes when a trained voice model is installed;
-        otherwise it is reported as unavailable.</p>
+        (at least 5 seconds), or upload a WAV file. <span id="voice-help">Voice only contributes when a trained voice
+        model is installed; otherwise it is reported as unavailable.</span></p>
+      <label class="opt" id="cloud-speech-opt" hidden><input type="checkbox" id="use-cloud-speech">
+        Analyse what I say with Azure AI Speech &amp; Language (audio and text are sent to Microsoft Azure for this check-in only)</label>
       <div class="row">
         <button type="button" id="rec-start" class="secondary">&#9679; Record</button>
         <button type="button" id="rec-stop" class="secondary" hidden>&#9632; Stop</button>
@@ -58,6 +66,8 @@
       <div class="row"><button type="button" id="rec-clear" class="secondary" hidden>Remove voice input</button></div>
     </section>
 
+    <label class="opt" id="history-opt" hidden><input type="checkbox" id="save-history">
+      Save an anonymised summary to my history so I can see my trend over time</label>
     <div id="error" class="error" role="alert" hidden></div>
     <button type="submit" id="submit" disabled>Get my check-in</button>
     <span id="loading" class="muted" hidden> Analysing&hellip;</span>
@@ -88,6 +98,18 @@
     <p class="muted">General self-care ideas, not clinical advice.</p>
 
     <p class="muted" id="r-disclaimer"></p>
+  </section>
+
+  <section class="card" id="history-card" hidden>
+    <h2>My history</h2>
+    <p class="muted" id="h-trend">Your saved check-ins appear here.</p>
+    <table><thead><tr><th>Date</th><th>Level</th><th>Score</th><th>Sources</th></tr></thead><tbody id="h-rows"></tbody></table>
+    <div class="row">
+      <button type="button" id="h-refresh" class="secondary">Refresh</button>
+      <button type="button" id="h-delete" class="secondary">Delete my history</button>
+      <span id="h-status" class="muted" aria-live="polite"></span>
+    </div>
+    <p class="muted" id="h-id-note"></p>
   </section>
 
   <details class="card" id="eval-panel">
