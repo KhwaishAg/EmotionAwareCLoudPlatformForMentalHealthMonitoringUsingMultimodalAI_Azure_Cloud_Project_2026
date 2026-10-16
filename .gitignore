@@ -92,3 +92,5 @@ data/processed/questionnaire_multihot_encoded.csv
 data/processed/questionnaire_ordinal_encoded.csv
 data/processed/questionnaire_features.csv
 data/processed/questionnaire_with_target.csv
+# Cloud deployment bundle output
+dist/

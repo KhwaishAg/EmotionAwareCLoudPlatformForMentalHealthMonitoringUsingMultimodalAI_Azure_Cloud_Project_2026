@@ -1,41 +1,157 @@
 """Unified multimodal assessment API.
 
 POST /assessment accepts whichever raw modality inputs the student actually
-provided (questionnaire responses, behavioral self-report, voice recording)
-and returns one fused assessment. Every modality is optional; each is run in
-its own try/except so a missing or failing modality is marked unavailable
-instead of crashing the whole request -- this is the actual "integration"
-contribution of Member 3's work, not a side effect.
+provided (questionnaire responses, behavioral self-report, voice recording or
+pre-extracted voice features) and returns one fused assessment. Every modality
+is optional; each is run in its own try/except so a missing or failing
+modality is marked unavailable instead of crashing the whole request.
 
-This module wraps, but does not modify, the already-validated components:
+Unavailable-modality policy (explicit, not silent):
+    * A modality that was not provided, has no trained model, or failed is
+      left out of fusion -- it is never zero-filled or guessed.
+    * The reason is reported per modality in ``modality_status``.
+    * Fusion re-normalizes weights over the modalities actually used and lists
+      them in ``assessment.modalities_used``.
+    * If no modality is usable, ``assessment.status`` is ``fusion_unavailable``
+      and the risk fields are ``null`` (HTTP 200: the request was valid, there
+      was just nothing to assess).
+
+This module wraps, but does not modify, the validated components:
     - src.ai_model.questionnaire.predict.predict_questionnaire
     - src.ai_model.behavioral.predict.predict_behavioral
-    - src.ai_model.voice.predict.predict_voice_from_features   (raises VoiceModelNotTrainedError
-      today -- no trained voice model exists yet; see that module's docstring)
+    - src.ai_model.voice.predict.predict_voice_from_features /
+      predict_voice_contract_from_audio  (VoiceModelNotTrainedError until a
+      voice model is trained)
     - src.ai_model.fusion.fusion_engine.fuse_modalities
+
+Non-clinical: outputs are stress/risk indicators for early-intervention
+support, not a diagnosis.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import logging
+import os
+import secrets
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, field_validator
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from src.ai_model.questionnaire.predict import REQUIRED_QUESTION_FIELDS, predict_questionnaire
+from src.ai_model.behavioral.behavioral_schema import FIELD_RANGES, REQUIRED_BEHAVIORAL_FIELDS
 from src.ai_model.behavioral.predict import predict_behavioral
-from src.ai_model.behavioral.behavioral_schema import REQUIRED_BEHAVIORAL_FIELDS
 from src.ai_model.fusion.fusion_engine import fuse_modalities
+from src.ai_model.questionnaire.predict import REQUIRED_QUESTION_FIELDS, predict_questionnaire
 
 try:
-    from src.ai_model.voice.predict import predict_voice_from_features, VoiceModelNotTrainedError
-except ImportError:  # pragma: no cover - voice package not importable in this environment
+    from src.ai_model.voice.predict import (
+        PredictionAudioError,
+        PredictionFeatureError,
+        VoiceModelLoadError,
+        VoiceModelNotTrainedError,
+        predict_voice_contract_from_audio,
+        predict_voice_from_features,
+        read_voice_training_report,
+    )
+except ImportError:  # pragma: no cover - voice dependencies not importable in this environment
     predict_voice_from_features = None  # type: ignore[assignment]
-    VoiceModelNotTrainedError = Exception  # type: ignore[assignment,misc]
+    predict_voice_contract_from_audio = None  # type: ignore[assignment]
+    VoiceModelNotTrainedError = type("VoiceModelNotTrainedError", (Exception,), {})  # type: ignore[assignment,misc]
+    PredictionAudioError = type("PredictionAudioError", (Exception,), {})  # type: ignore[assignment,misc]
+    PredictionFeatureError = type("PredictionFeatureError", (Exception,), {})  # type: ignore[assignment,misc]
+    VoiceModelLoadError = type("VoiceModelLoadError", (Exception,), {})  # type: ignore[assignment,misc]
+    read_voice_training_report = lambda: None  # type: ignore[assignment]  # noqa: E731
+
+try:
+    from src.ai_model.voice.emotion import (
+        EmotionModelLoadError,
+        EmotionModelNotTrainedError,
+        predict_emotion_from_audio,
+        predict_emotion_from_features,
+    )
+except ImportError:  # pragma: no cover
+    predict_emotion_from_audio = None  # type: ignore[assignment]
+    predict_emotion_from_features = None  # type: ignore[assignment]
+    EmotionModelNotTrainedError = type("EmotionModelNotTrainedError", (Exception,), {})  # type: ignore[assignment,misc]
+    EmotionModelLoadError = type("EmotionModelLoadError", (Exception,), {})  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("assessment_api")
 
-app = FastAPI(title="Multimodal Student Assessment API", version="1.0.0")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+FRONTEND_DIR = PROJECT_ROOT / "src" / "frontend"
+
+# The shipped questionnaire/behavioral artifacts were serialized with this
+# scikit-learn version (it needs Python >= 3.11); other versions may fail to
+# load or predict.
+EXPECTED_SKLEARN_VERSION = "1.8.0"
+MAX_AUDIO_BYTES = 10 * 1024 * 1024  # decoded WAV upload limit
+
+DISCLAIMER = (
+    "Non-clinical research/demonstration tool. Results are stress/risk indicators "
+    "for early-intervention support, not a medical or psychological diagnosis."
+)
+
+# Zero-cost, fully local by default: the interactive API docs page loads its assets from a public CDN,
+# so it is off unless explicitly enabled (ENABLE_API_DOCS=1). The app itself makes no network calls.
+_DOCS_ENABLED = os.environ.get("ENABLE_API_DOCS") == "1"
+app = FastAPI(
+    title="Multimodal Student Assessment API",
+    version="1.2.0",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url=None,
+)
+
+# Privacy: nothing the user submits is stored by this service, and responses must
+# not be cached by browsers or proxies. The UI is served with a strict CSP.
+_UI_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+)
+
+
+def _access_credentials() -> Optional[tuple[str, str]]:
+    """Optional shared password for public hosting. Off unless BOTH env vars are set (never in code)."""
+    user, password = os.environ.get("APP_ACCESS_USER"), os.environ.get("APP_ACCESS_PASSWORD")
+    return (user, password) if user and password else None
+
+
+def _is_authorized(request: Request) -> bool:
+    credentials = _access_credentials()
+    if credentials is None or request.url.path == "/health":  # /health lets a host probe liveness; it exposes nothing
+        return True
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("basic "):
+        return False
+    try:
+        user, _, password = base64.b64decode(header[6:], validate=True).decode("utf-8").partition(":")
+    except (binascii.Error, ValueError):
+        return False
+    return secrets.compare_digest(user.encode(), credentials[0].encode()) and secrets.compare_digest(
+        password.encode(), credentials[1].encode()
+    )
+
+
+@app.middleware("http")
+async def privacy_headers(request: Request, call_next):
+    if _is_authorized(request):
+        response = await call_next(request)
+    else:
+        response = Response("Authentication required.", status_code=401,
+                            headers={"WWW-Authenticate": 'Basic realm="Student Stress Check-in"'})
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "microphone=(self), camera=(), geolocation=()"
+    if request.url.path == "/" or request.url.path.startswith("/app"):
+        response.headers["Content-Security-Policy"] = _UI_CSP
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -69,12 +185,19 @@ class BehavioralInput(BaseModel):
 
 
 class VoiceInput(BaseModel):
+    """Voice input: either a base64-encoded WAV recording or extracted features."""
+
     model_config = ConfigDict(extra="forbid")
-    # Placeholder shape: acoustic feature dict. Once voice recording upload
-    # is wired up, this becomes raw audio bytes/base64 and the API extracts
-    # features itself via src.ai_model.voice.features. Left minimal on
-    # purpose since no trained model consumes this yet.
-    features: dict[str, Any]
+    audio_base64: Optional[str] = None
+    features: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> "VoiceInput":
+        if (self.audio_base64 is None) == (self.features is None):
+            raise ValueError("Provide exactly one of 'audio_base64' or 'features'.")
+        if self.audio_base64 is not None and len(self.audio_base64) > (MAX_AUDIO_BYTES * 4) // 3 + 8:
+            raise ValueError("Audio upload is too large.")
+        return self
 
 
 class AssessmentRequest(BaseModel):
@@ -120,20 +243,50 @@ def _run_behavioral(payload: Optional[BehavioralInput]) -> tuple[Optional[dict],
         return None, "prediction_failed"
 
 
+@contextmanager
+def _temp_wav(audio_base64: str):
+    """Decode an uploaded WAV to a private temp file for the duration of the block; always deleted."""
+    try:
+        raw = base64.b64decode(audio_base64, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("audio_base64 is not valid base64.") from error
+    if not raw or len(raw) > MAX_AUDIO_BYTES:
+        raise ValueError("Audio is empty or exceeds the upload size limit.")
+    handle, name = tempfile.mkstemp(suffix=".wav")
+    try:
+        with os.fdopen(handle, "wb") as target:
+            target.write(raw)
+        yield name
+    finally:
+        try:
+            os.remove(name)
+        except OSError:  # pragma: no cover - best-effort cleanup
+            logger.warning("Could not remove temporary audio file.")
+
+
+def _predict_voice_audio(audio_base64: str) -> dict:
+    with _temp_wav(audio_base64) as path:
+        return predict_voice_contract_from_audio(path)
+
+
 def _run_voice(payload: Optional[VoiceInput]) -> tuple[Optional[dict], Optional[str]]:
     if payload is None:
         return None, "not_provided"
     if predict_voice_from_features is None:
         return None, "module_unavailable"
     try:
-        return predict_voice_from_features(payload.features), None
+        if payload.features is not None:
+            return predict_voice_from_features(payload.features), None
+        return _predict_voice_audio(payload.audio_base64 or ""), None
     except VoiceModelNotTrainedError:
-        # Expected today: no trained voice model exists yet. This is not a
-        # bug -- it is the correct, honest state of an optional modality
-        # that has infrastructure but no dataset/training run yet.
+        # Expected until a voice model is trained: honest "unavailable", not a bug.
         logger.info("Voice modality skipped: no trained model available yet.")
         return None, "model_not_trained"
-    except (TypeError, ValueError) as error:
+    except VoiceModelLoadError:
+        # Artifact present but unusable (corrupt, wrong feature set, demo-only model).
+        logger.error("Voice model artifact could not be used.")
+        return None, "model_unavailable"
+    except (PredictionAudioError, PredictionFeatureError, TypeError, ValueError) as error:
         logger.warning("Voice input rejected: %s", error)
         return None, "invalid_input"
     except Exception:
@@ -141,8 +294,32 @@ def _run_voice(payload: Optional[VoiceInput]) -> tuple[Optional[dict], Optional[
         return None, "prediction_failed"
 
 
+def _run_voice_emotion(payload: Optional[VoiceInput]) -> tuple[Optional[dict], Optional[str]]:
+    """Experimental acted-emotion category. Separate from stress risk: never fused, never in modality_status."""
+    if payload is None:
+        return None, None
+    if predict_emotion_from_audio is None:
+        return None, "module_unavailable"
+    try:
+        if payload.features is not None:
+            return predict_emotion_from_features(payload.features), "available"
+        with _temp_wav(payload.audio_base64 or "") as path:
+            return predict_emotion_from_audio(path), "available"
+    except EmotionModelNotTrainedError:
+        return None, "model_not_trained"
+    except EmotionModelLoadError:
+        logger.error("Emotion model artifact could not be used.")
+        return None, "model_unavailable"
+    except (PredictionAudioError, PredictionFeatureError, TypeError, ValueError) as error:
+        logger.warning("Emotion input rejected: %s", error)
+        return None, "invalid_input"
+    except Exception:
+        logger.exception("Unexpected emotion prediction failure.")
+        return None, "prediction_failed"
+
+
 # ---------------------------------------------------------------------------
-# Endpoint
+# Endpoints
 # ---------------------------------------------------------------------------
 
 @app.post("/assessment")
@@ -150,16 +327,15 @@ def assess(request: AssessmentRequest) -> dict:
     """Run every provided modality, fuse the usable results, and return one assessment.
 
     Never raises for a missing or failing individual modality -- that is
-    reflected in `modality_status` and in the fusion result's own
-    `modalities_used` / `status` fields. A 422 is only returned when the
-    request body itself is unparseable (handled by FastAPI/pydantic before
-    this function runs); a 500 is reserved for the fusion step itself
-    failing, which should not happen given fuse_modalities' own contract
-    validation.
+    reflected in ``modality_status`` and in the fusion result's own
+    ``modalities_used`` / ``status`` fields. A 422 is returned when the request
+    body itself is invalid; a 500 is reserved for the fusion step failing its
+    own contract validation (an internal bug, never a client error).
     """
     questionnaire_result, questionnaire_status = _run_questionnaire(request.questionnaire)
     behavioral_result, behavioral_status = _run_behavioral(request.behavioral)
     voice_result, voice_status = _run_voice(request.voice)
+    emotion_result, emotion_status = _run_voice_emotion(request.voice)
 
     try:
         fused = fuse_modalities(
@@ -167,24 +343,208 @@ def assess(request: AssessmentRequest) -> dict:
             voice=voice_result,
             behavioral=behavioral_result,
         )
-    except ValueError as error:
-        # A modality result failed fuse_modalities' own strict contract
-        # validation -- this indicates an internal bug in one of the
-        # predictors above, not a client error, so surface it as a 500
-        # rather than misleadingly blaming the request.
+    except ValueError:
+        # A modality result failed the fusion contract: an internal predictor
+        # bug. Log details server-side; return a generic message to the client.
         logger.exception("Fusion contract validation failed unexpectedly.")
-        raise HTTPException(status_code=500, detail=f"Fusion could not be completed: {error}") from error
+        raise HTTPException(status_code=500, detail="Assessment could not be completed.") from None
 
+    details = {
+        name: {
+            "risk_score": result["risk_score"],
+            "risk_level": result["risk_level"],
+            "confidence": result["confidence"],
+            "completeness": result["data_quality"]["completeness"],
+        }
+        for name, result in (
+            ("questionnaire", questionnaire_result),
+            ("behavioral", behavioral_result),
+            ("voice", voice_result),
+        )
+        if result is not None
+    }
     return {
         "assessment": fused,
+        "modality_details": details,
+        # Experimental, acted-speech emotion category: separate from stress risk and never fused.
+        "voice_emotion": None if emotion_status is None else {"status": emotion_status, "result": emotion_result},
         "modality_status": {
             "questionnaire": questionnaire_status or "available",
             "behavioral": behavioral_status or "available",
             "voice": voice_status or "available",
         },
+        "disclaimer": DISCLAIMER,
     }
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+def _artifact_present(*relative: str) -> bool:
+    return all((PROJECT_ROOT / part).exists() for part in relative)
+
+
+def _voice_model_summary(present: bool) -> dict:
+    """Provenance of the voice model (from its training report); never paths or raw data."""
+    if not present:
+        return {"trained": False}
+    report = read_voice_training_report()
+    if not report:
+        return {"trained": True, "provenance": "unknown (no training report found)"}
+    held_out = report.get("held_out_metrics") or {}
+    split = (report.get("split") or {}).get("held_out_test") or {}
+    return {
+        "trained": True,
+        "dataset_kind": report.get("dataset_kind"),
+        "served": report.get("dataset_kind") != "synthetic_demo",
+        "held_out_macro_f1": held_out.get("macro_f1"),
+        "held_out_participants": split.get("participants"),
+        "note": "Held-out figures describe the training dataset only; not clinical or real-world accuracy.",
+    }
+
+
+@app.get("/status")
+def status() -> dict:
+    """Diagnostics: model artifact availability and environment compatibility.
+
+    Reports only presence/versions -- never paths outside the project, secrets
+    or user data.
+    """
+    try:
+        import sklearn
+
+        sklearn_version = sklearn.__version__
+    except ImportError:  # pragma: no cover
+        sklearn_version = None
+    voice_trained = _artifact_present("models/voice/selected_model.json") or _artifact_present(
+        "models/voice/voice_model.joblib"
+    )
+    return {
+        "status": "ok",
+        "models": {
+            "questionnaire": _artifact_present("models/questionnaire/selected_model.json"),
+            "behavioral": _artifact_present("models/behavioral/logistic_regression.joblib"),
+            "voice": voice_trained,
+        },
+        "environment": {
+            "scikit_learn": sklearn_version,
+            "expected_scikit_learn": EXPECTED_SKLEARN_VERSION,
+            "compatible": sklearn_version == EXPECTED_SKLEARN_VERSION,
+        },
+        "voice_model": _voice_model_summary(voice_trained),
+        "voice_emotion_model": {"trained": _artifact_present("models/voice_emotion/selected_model.json")},
+        "note": "Behavioral model was trained on synthetic data; voice model is untrained unless 'voice' is true.",
+    }
+
+
+def _read_json(relative: str) -> Optional[dict]:
+    path = PROJECT_ROOT / relative
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _emotion_summary() -> dict:
+    report = _read_json("models/voice_emotion/voice_training_report.json")
+    caveat = ("Experimental acted-speech emotion categories; not a stress measure, never used in the overall "
+              "assessment, not validated on students.")
+    if not report:
+        return {"trained": False, "caveat": caveat}
+    held = report.get("held_out_metrics") or {}
+    split = (report.get("split") or {}).get("held_out_test") or {}
+    return {
+        "trained": True,
+        "dataset": (report.get("dataset") or {}).get("name"),
+        "classes": report.get("classes"),
+        "held_out_accuracy": held.get("accuracy"),
+        "held_out_macro_f1": held.get("macro_f1"),
+        "held_out_speakers": split.get("participants"),
+        "chance_accuracy": 1 / len(report["classes"]) if report.get("classes") else None,
+        "caveat": caveat,
+    }
+
+
+@app.get("/evaluation")
+def evaluation() -> dict:
+    """Honest, file-derived summary of how each model was trained and evaluated.
+
+    Figures describe the training datasets only and are never clinical or
+    real-world accuracy.
+    """
+    questionnaire_meta = _read_json("models/questionnaire/training_metadata.json") or {}
+    questionnaire_sel = _read_json("models/questionnaire/selected_model.json") or {}
+    behavioral_meta = _read_json("models/behavioral/training_metadata.json") or {}
+    voice_summary = _voice_model_summary(
+        _artifact_present("models/voice/selected_model.json") or _artifact_present("models/voice/voice_model.joblib")
+    )
+    return {
+        "questionnaire": {
+            "data": "real responses",
+            "respondents": questionnaire_meta.get("dataset_rows"),
+            "class_counts": questionnaire_meta.get("class_counts"),
+            "model": questionnaire_sel.get("selected_model"),
+            "cross_validated_macro_f1": questionnaire_sel.get("macro_f1_mean"),
+            "cross_validated_balanced_accuracy": questionnaire_sel.get("balanced_accuracy_mean"),
+            "caveat": "Small sample (cross-validation); the target is derived from one self-reported stress item. Not clinically validated.",
+        },
+        "behavioral": {
+            "data": "synthetic" if behavioral_meta.get("synthetic_data") else "unknown",
+            "model": behavioral_meta.get("model"),
+            "test_accuracy": behavioral_meta.get("test_accuracy"),
+            "caveat": behavioral_meta.get("notice")
+            or "Trained on synthetic data; the score reflects clean synthetic classes, not real-world performance.",
+        },
+        "voice": voice_summary
+        if voice_summary.get("trained")
+        else {"trained": False, "caveat": "No voice model yet: a labeled audio dataset is required (see docs/voice_model_training.md)."},
+        "voice_emotion": _emotion_summary(),
+        "disclaimer": DISCLAIMER,
+    }
+
+
+def _questionnaire_items() -> list[dict]:
+    """Question text, answer type and allowed options, derived from the model's own encoders."""
+    from src.ai_model.questionnaire.categorical_encoder import Q1_MAPPING, Q2_CANONICAL_OPTIONS
+    from src.ai_model.questionnaire.ordinal_encoder import QUESTION_CATEGORY_MAPPINGS, SPECIAL_RESPONSE_TEXT
+    from src.ai_model.questionnaire.questionnaire_schema import QUESTIONNAIRE_SCHEMA
+
+    items = []
+    for question_id in REQUIRED_QUESTION_FIELDS:
+        meta = QUESTIONNAIRE_SCHEMA[question_id]
+        kind, options = "single", []
+        if question_id == "Q1":
+            options = list(Q1_MAPPING)
+        elif question_id == "Q2":
+            kind, options = "multi", list(Q2_CANONICAL_OPTIONS)
+        elif question_id in ("Q10", "Q11"):
+            kind, options = "multi", list(meta.canonical_options or [])
+        elif question_id in QUESTION_CATEGORY_MAPPINGS:
+            options = list(QUESTION_CATEGORY_MAPPINGS[question_id])
+            if question_id in ("Q14", "Q16"):
+                options.append(SPECIAL_RESPONSE_TEXT)
+        text = meta.column_name.strip()
+        items.append({"id": question_id, "text": text.split(". ", 1)[-1], "type": kind, "options": options})
+    return items
+
+
+@app.get("/schema")
+def schema() -> dict:
+    """Input schema hints used by the bundled web UI."""
+    return {
+        "questionnaire_fields": list(REQUIRED_QUESTION_FIELDS),
+        "questionnaire_items": _questionnaire_items(),
+        "behavioral_fields": {name: {"min": low, "max": high} for name, (low, high) in FIELD_RANGES.items()},
+        "max_audio_bytes": MAX_AUDIO_BYTES,
+    }
+
+
+if (FRONTEND_DIR / "index.html").exists():
+    app.mount("/app", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        return RedirectResponse(url="/app/")

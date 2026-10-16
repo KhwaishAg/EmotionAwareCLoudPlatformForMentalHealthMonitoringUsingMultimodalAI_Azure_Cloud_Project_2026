@@ -161,10 +161,13 @@ from .predict import (
     PredictionError,
     PredictionFeatureError,
     PredictionModelError,
+    VoiceModelLoadError,
     VoiceModelNotTrainedError,
     VoicePredictionResult,
     predict_voice,
     predict_voice_from_features,
+    predict_voice_contract_from_audio,
+    extract_voice_features_from_audio,
 )
 from .fusion_interface import (
     MODALITY_NAME,

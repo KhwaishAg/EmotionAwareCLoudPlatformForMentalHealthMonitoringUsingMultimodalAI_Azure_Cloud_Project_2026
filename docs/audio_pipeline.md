@@ -149,3 +149,9 @@ Preprocessing pipeline will:
 Output:
     - Clean, standardized waveform ready for acoustic feature extraction
 ```
+
+---
+
+## Training and inference
+
+Model training, held-out evaluation, the dataset required and inference/error behavior are documented in [`voice_model_training.md`](voice_model_training.md).

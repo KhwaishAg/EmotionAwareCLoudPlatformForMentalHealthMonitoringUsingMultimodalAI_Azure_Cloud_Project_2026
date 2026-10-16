@@ -18,6 +18,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
+pytest.importorskip("azure.storage.blob", reason="optional Azure SDK not installed (not needed to run the app)")
+pytest.importorskip("azure.ai.ml", reason="optional Azure SDK not installed (not needed to run the app)")
+
 from azure.ai.ml import Input, Output
 from azure.ai.ml.constants import AssetTypes
 from azure.ai.ml.entities import Command

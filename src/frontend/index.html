@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Student Stress Check-in</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Student Stress Check-in</h1>
+  <p class="muted">Multimodal (questionnaire, daily habits, optional voice) stress/risk indicator &mdash; experimental research demonstration.</p>
+
+  <div class="notice" role="note">
+    <strong>Not a medical tool.</strong> This is a non-clinical research and early-intervention demonstration.
+    It does not diagnose any condition and does not replace a counsellor, psychologist or doctor.
+    If you are struggling or feel unsafe, please contact your campus counselling service or a local helpline.
+  </div>
+
+  <form id="form" novalidate>
+    <section class="card">
+      <h2>Consent &amp; privacy</h2>
+      <ul class="muted">
+        <li>Everything is optional &mdash; share only what you are comfortable with.</li>
+        <li>Your answers are sent to the assessment service running on this computer, used to compute the result,
+          and <strong>not stored</strong>. Nothing is saved by this page, and results are not cached by the browser.</li>
+        <li>A voice recording is held in memory in your browser, sent once, analysed from a temporary file that is
+          deleted immediately, and never kept. Nothing is uploaded to any external service.</li>
+        <li>Results are indicators from small, experimental models (see &ldquo;How these models were evaluated&rdquo;).</li>
+      </ul>
+      <label><input type="checkbox" id="consent"> I understand this is a non-clinical demonstration and I consent to my answers being processed.</label>
+    </section>
+
+    <section class="card">
+      <h2>1. Questionnaire <span class="muted">(answer all 20 if you include it)</span></h2>
+      <label class="opt"><input type="checkbox" id="use-q" checked> Include questionnaire</label>
+      <div id="q-container" class="muted">Loading questions&hellip;</div>
+    </section>
+
+    <section class="card">
+      <h2>2. Daily habits</h2>
+      <label class="opt"><input type="checkbox" id="use-b" checked> Include daily habits</label>
+      <div id="b-container"></div>
+    </section>
+
+    <section class="card">
+      <h2>3. Voice <span class="muted">(optional)</span></h2>
+      <p class="muted">Speak for 30&ndash;60 seconds about your recent academic workload and how you have been feeling
+        (at least 5 seconds), or upload a WAV file. Voice only contributes when a trained voice model is installed;
+        otherwise it is reported as unavailable.</p>
+      <div class="row">
+        <button type="button" id="rec-start" class="secondary">&#9679; Record</button>
+        <button type="button" id="rec-stop" class="secondary" hidden>&#9632; Stop</button>
+        <span id="rec-status" class="muted" aria-live="polite"></span>
+      </div>
+      <p class="muted">or upload a WAV file:</p>
+      <input type="file" id="voice-file" accept=".wav,audio/wav,audio/x-wav">
+      <div class="row"><button type="button" id="rec-clear" class="secondary" hidden>Remove voice input</button></div>
+    </section>
+
+    <div id="error" class="error" role="alert" hidden></div>
+    <button type="submit" id="submit" disabled>Get my check-in</button>
+    <span id="loading" class="muted" hidden> Analysing&hellip;</span>
+  </form>
+
+  <section id="result" class="card" hidden aria-live="polite">
+    <h2>Your result</h2>
+    <p><span id="r-level" class="badge"></span> <span id="r-summary"></span></p>
+    <div class="bar" aria-hidden="true"><span id="r-bar"></span></div>
+    <p class="muted" id="r-conf"></p>
+
+    <h2>By source</h2>
+    <div id="r-cards" class="cards"></div>
+
+    <div id="r-emotion" class="mini" hidden>
+      <h3>Vocal emotion (experimental, separate from the stress result)</h3>
+      <p id="r-emotion-body" class="muted"></p>
+      <p class="muted">Recognises <em>acted</em> emotion categories from speech. It is not a measure of stress or mental
+        health, is not used in the overall result above, and has not been validated on real student speech.</p>
+    </div>
+
+    <h2>What contributed</h2>
+    <table><thead><tr><th>Factor</th><th>From</th><th>Direction</th><th>Weight</th></tr></thead><tbody id="r-factors"></tbody></table>
+    <p class="muted">Factors are model associations, not causes.</p>
+
+    <h2>Suggestions</h2>
+    <ul id="r-advice"></ul>
+    <p class="muted">General self-care ideas, not clinical advice.</p>
+
+    <p class="muted" id="r-disclaimer"></p>
+  </section>
+
+  <details class="card" id="eval-panel">
+    <summary>How these models were evaluated</summary>
+    <div id="eval-body" class="muted">Loading&hellip;</div>
+  </details>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# Test/development dependencies (all free, local). Install with: pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=7.4.0              # Test runner
+httpx>=0.27                # Required by fastapi.testclient (API integration tests)
+pyyaml>=6.0                # Parses the Azure ML YAML templates in tests (no Azure access needed)

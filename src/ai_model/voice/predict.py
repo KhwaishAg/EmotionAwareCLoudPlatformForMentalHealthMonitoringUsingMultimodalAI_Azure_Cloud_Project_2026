@@ -26,11 +26,13 @@ Note:
 """
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
 
 import numpy as np
+import pandas as pd
 
 from .config import AUDIO_CONFIG, FEATURE_CONFIG, PATH_CONFIG, AudioConfig, FeatureConfig
 from .recording import (
@@ -372,74 +374,158 @@ class VoiceModelNotTrainedError(ModelNotFoundError):
     """
 
 
+class VoiceModelLoadError(PredictionModelError):
+    """Raised when a voice model artifact exists but cannot be used.
+
+    Covers corrupt/unreadable files, a feature set that does not match the
+    current extraction pipeline, and demo models that are not allowed to act
+    as real predictors.
+    """
+
+
+TRAINING_REPORT_FILENAME = "voice_training_report.json"
+#: Setting this environment variable to ``1`` allows models trained on
+#: ``synthetic_demo`` / ``public_acted`` data to be loaded (demonstrations/tests only).
+ALLOW_DEMO_MODEL_ENV = "VOICE_ALLOW_DEMO_MODEL"
+#: ``dataset_kind`` values (written by train_voice.py) that are never served as
+#: stress-risk predictors unless explicitly overridden: synthetic data, and acted
+#: emotional speech, which is not defensible ground truth for student stress.
+DEMO_DATASET_KINDS = ("synthetic_demo", "public_acted")
+#: The only model task this stress-risk loader serves.
+STRESS_TASK = "stress_risk"
+
+
 def _load_json(path: Path) -> Dict[str, Any]:
     with path.open(encoding="utf-8") as source:
         return json.load(source)
 
 
-def load_selected_voice_model():
-    """Load the trained voice model named in models/voice/selected_model.json.
+def read_voice_training_report() -> Optional[Dict[str, Any]]:
+    """Return the training report written next to the model, or ``None``.
 
-    Raises VoiceModelNotTrainedError until a real model is trained on a
-    labeled voice dataset and saved to models/voice/.
+    Unreadable reports are treated as absent rather than raising.
+    """
+    path = MODELS_DIR / TRAINING_REPORT_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        report = _load_json(path)
+    except (OSError, ValueError):
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def _check_model_allowed() -> None:
+    report = read_voice_training_report()
+    if not report:
+        return
+    if report.get("task", STRESS_TASK) != STRESS_TASK:
+        raise VoiceModelLoadError("This model was not trained for stress-risk prediction and cannot be used for it.")
+    if report.get("dataset_kind") in DEMO_DATASET_KINDS and os.environ.get(ALLOW_DEMO_MODEL_ENV) != "1":
+        raise VoiceModelLoadError(
+            "The voice model was trained on synthetic or acted-emotion data, which is not defensible stress "
+            "ground truth, and is not served as a real stress predictor."
+        )
+
+
+def load_selected_voice_model():
+    """Load the trained voice model, returning ``(model, model_name)``.
+
+    Resolution order:
+        1. ``models/voice/selected_model.json`` naming ``<selected_model>.joblib``
+           (the layout used by the questionnaire and behavioral modalities).
+        2. ``models/voice/voice_model.joblib`` (the default artifact written by
+           the voice training/serialization utilities).
+
+    Raises:
+        VoiceModelNotTrainedError: if neither artifact exists (no trained model).
+        VoiceModelLoadError: if an artifact exists but is corrupt, was trained on
+            a different feature set, or is a synthetic demo model.
     """
     selector = MODELS_DIR / "selected_model.json"
-    if not selector.exists():
+    default_artifact = MODELS_DIR / "voice_model.joblib"
+    if selector.exists():
+        try:
+            model_name = _load_json(selector).get("selected_model")
+        except (OSError, ValueError, AttributeError) as error:
+            raise VoiceModelLoadError("selected_model.json could not be read.") from error
+        artifact = MODELS_DIR / f"{model_name}.joblib"
+        if not isinstance(model_name, str) or not model_name or Path(model_name).name != model_name:
+            raise VoiceModelLoadError("selected_model.json does not name a valid model.")
+        if not artifact.exists():
+            raise VoiceModelNotTrainedError(f"Selected voice model artifact was not found: {artifact.name}")
+    elif default_artifact.exists():
+        model_name, artifact = default_artifact.stem, default_artifact
+    else:
         raise VoiceModelNotTrainedError(
             "No trained voice model is available yet. Voice model training is "
             "pending a suitable real labeled voice dataset; this modality is "
             "currently optional/unavailable."
         )
-    selected = _load_json(selector)
-    model_name = selected.get("selected_model")
-    artifact = MODELS_DIR / f"{model_name}.joblib"
-    if not artifact.exists():
-        raise VoiceModelNotTrainedError(f"Selected voice model artifact was not found: {artifact}")
-    return load_voice_model(artifact), model_name
+
+    _check_model_allowed()
+    try:
+        model = load_voice_model(artifact)
+    except ModelError as error:
+        raise VoiceModelLoadError(f"Voice model artifact '{artifact.name}' could not be loaded.") from error
+    except Exception as error:  # joblib/pickle/sklearn version problems
+        raise VoiceModelLoadError(f"Voice model artifact '{artifact.name}' is unreadable.") from error
+    if list(model.feature_names_ or []) != list(COMBINED_FEATURE_NAMES):
+        raise VoiceModelLoadError(
+            "Voice model was trained on a different feature set than the current extraction pipeline."
+        )
+    return model, str(model_name)
 
 
-def predict_voice_from_features(features: Dict[str, Any]) -> Dict[str, Any]:
-    """Predict voice-derived stress risk from extracted features.
+def _validate_feature_dict(features: Any) -> Dict[str, float]:
+    """Validate a raw acoustic-feature dict and return only the known, non-null values.
 
-    Parameters
-    ----------
-    features:
-        Dict of the combined acoustic features (COMBINED_FEATURE_NAMES), as
-        produced by src.ai_model.voice.features.extract_combined_dict().
-
-    Returns
-    -------
-    The standardized fusion contract dict (modality, risk_score, risk_level,
-    confidence, available_features, total_features, key_factors, data_quality).
-
-    Raises
-    ------
-    VoiceModelNotTrainedError
-        Until a trained model artifact exists at models/voice/. Callers must
-        treat voice as an unavailable modality, never a crash.
+    ``None`` values are dropped (and later reported as missing); unknown keys
+    and non-finite / non-numeric values are rejected.
     """
-    model, _model_name = load_selected_voice_model()
+    if not isinstance(features, dict):
+        raise TypeError("Voice features must be a dictionary.")
+    unknown = [key for key in features if key not in COMBINED_FEATURE_NAMES]
+    if unknown:
+        raise ValueError("Unsupported voice features: " + ", ".join(sorted(map(str, unknown))))
+    cleaned: Dict[str, float] = {}
+    for name, value in features.items():
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+            raise ValueError(f"Voice feature '{name}' must be numeric.")
+        if not np.isfinite(float(value)):
+            raise ValueError(f"Voice feature '{name}' must be finite.")
+        cleaned[name] = float(value)
+    return cleaned
 
-    ordered = {name: features.get(name, np.nan) for name in COMBINED_FEATURE_NAMES}
-    probability_map = model.predict_proba_dict([ordered])[0]
+
+def _build_fusion_contract(model: BaseVoiceClassifier, features: Dict[str, float]) -> Dict[str, Any]:
+    """Run ``model`` on validated features and build the standardized contract."""
+    total = len(COMBINED_FEATURE_NAMES)
+    missing = [name for name in COMBINED_FEATURE_NAMES if name not in features]
+    if missing:
+        # The fitted voice classifiers have no imputer; guessing values would
+        # silently distort the result. A recording always yields every feature.
+        raise ValueError(f"Voice features are incomplete: {len(missing)} of {total} missing.")
+    row = pd.DataFrame([{name: features[name] for name in COMBINED_FEATURE_NAMES}])[list(COMBINED_FEATURE_NAMES)]
+    available = total
+
+    try:
+        probability_map = model.predict_proba_dict(row)[0]
+    except Exception as error:  # model errors must never leak as raw exceptions
+        raise PredictionModelError("Voice model inference failed.") from error
     if set(probability_map) != set(RISK_WEIGHTS):
-        raise ValueError("Voice model classes must be exactly low, moderate, and high.")
+        raise PredictionModelError("Voice model classes must be exactly low, moderate, and high.")
     risk_level = max(probability_map, key=probability_map.get)
     risk_score = float(sum(RISK_WEIGHTS[level] * probability_map[level] for level in RISK_WEIGHTS))
     ordered_probs = sorted(probability_map.values(), reverse=True)
     confidence = float(np.clip(0.5 * ordered_probs[0] + 0.5 * (ordered_probs[0] - ordered_probs[1]), 0.0, 1.0))
 
-    total = len(COMBINED_FEATURE_NAMES)
-    available = sum(
-        1 for value in ordered.values()
-        if value is not None and not (isinstance(value, float) and np.isnan(value))
-    )
-
+    key_factors: List[Dict[str, Any]] = []
     explainability_path = MODELS_DIR / "voice_explainability_metadata.json"
-    key_factors = []
     if explainability_path.exists():
-        explainability = _load_json(explainability_path)
-        top = explainability.get("top_features", [])[:5]
+        top = _load_json(explainability_path).get("top_features", [])[:5]
         maximum = max((float(item.get("importance", 0.0)) for item in top), default=0.0)
         key_factors = [
             {
@@ -455,11 +541,91 @@ def predict_voice_from_features(features: Dict[str, Any]) -> Dict[str, Any]:
         "risk_score": risk_score,
         "risk_level": risk_level,
         "confidence": confidence,
-        "available_features": available,
+        "available_features": int(available),
         "total_features": total,
         "key_factors": key_factors,
         "data_quality": {
-            "missing_features": total - available,
+            "missing_features": total - int(available),
             "completeness": float(available / total) if total else 0.0,
         },
     }
+
+
+def predict_voice_from_features(
+    features: Dict[str, Any],
+    model: Optional[BaseVoiceClassifier] = None,
+) -> Dict[str, Any]:
+    """Predict voice-derived stress risk from extracted acoustic features.
+
+    Parameters
+    ----------
+    features:
+        Dict keyed by COMBINED_FEATURE_NAMES, as produced by
+        :func:`extract_voice_features_from_audio`.
+    model:
+        Optional pre-loaded fitted classifier (mainly for tests); when omitted
+        the trained artifact in ``models/voice/`` is loaded.
+
+    Returns
+    -------
+    The standardized fusion contract dict (modality, risk_score, risk_level,
+    confidence, available_features, total_features, key_factors, data_quality).
+
+    Raises
+    ------
+    VoiceModelNotTrainedError
+        If no trained model artifact exists. Callers must treat voice as an
+        unavailable modality, never a crash.
+    TypeError / ValueError
+        For malformed feature input.
+    """
+    cleaned = _validate_feature_dict(features)
+    if model is None:
+        model, _ = load_selected_voice_model()
+    return _build_fusion_contract(model, cleaned)
+
+
+def extract_voice_features_from_audio(
+    audio_file_path: Union[str, Path],
+    audio_config: AudioConfig = AUDIO_CONFIG,
+    feature_config: FeatureConfig = FEATURE_CONFIG,
+) -> Dict[str, float]:
+    """Validate, preprocess and extract the combined acoustic feature dict.
+
+    Raises:
+        PredictionAudioError: invalid, missing or corrupt audio.
+        PredictionFeatureError: feature extraction failed.
+    """
+    from .features import extract_combined_dict
+
+    path = Path(audio_file_path)
+    try:
+        validation = validate_audio_file(file_path=path, config=audio_config, strict=False)
+        if not validation.is_valid:
+            errors = "; ".join(validation.errors) if validation.errors else "Unknown validation failure"
+            raise PredictionAudioError(f"Audio validation failed: {errors}")
+        preprocessed = preprocess_audio(audio=path, config=audio_config)
+    except PredictionAudioError:
+        raise
+    except AudioError as error:
+        raise PredictionAudioError(f"Audio could not be processed: {error}") from error
+    except Exception as error:
+        raise PredictionAudioError(f"Unexpected audio processing failure: {error}") from error
+    try:
+        combined = extract_combined_dict(audio=preprocessed, config=feature_config)
+        return {name: float(value) for name, value in combined.items()}
+    except FeatureExtractionError as error:
+        raise PredictionFeatureError(f"Feature extraction failed: {error}") from error
+    except Exception as error:
+        raise PredictionFeatureError(f"Unexpected feature extraction failure: {error}") from error
+
+
+def predict_voice_contract_from_audio(
+    audio_file_path: Union[str, Path],
+    model: Optional[BaseVoiceClassifier] = None,
+) -> Dict[str, Any]:
+    """Audio file in, standardized fusion contract out (voice end to end)."""
+    if model is None:
+        model, _ = load_selected_voice_model()  # fail fast before heavy audio work
+    features = extract_voice_features_from_audio(audio_file_path)
+    return predict_voice_from_features(features, model=model)

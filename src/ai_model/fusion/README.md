@@ -35,3 +35,10 @@ print(result["risk_score"], result["normalized_weights"])
 For example, output retains the shared prediction fields and adds fusion evidence: `{"modality": "multimodal_fusion", "risk_score": 0.69, "risk_level": "high", "modalities_used": ["questionnaire", "voice"], "agreement": {"score": 0.92, "level": "high"}}`.
 
 The executable integration tests include explicitly labeled mock voice and behavioral contracts only to validate interface behavior. They are not model outputs, training data, research results, medical advice, or clinical validation.
+
+## Unavailable-modality policy and voice
+
+* The assessment API passes `None` for any modality that was not provided, has no trained model, was invalid, or failed; the per-modality reason is returned in `modality_status`. Nothing is zero-filled or guessed.
+* Voice produces this contract through `src.ai_model.voice.predict.predict_voice_from_features` (extracted features) or `predict_voice_contract_from_audio` (WAV file). Both raise `VoiceModelNotTrainedError` until a model exists in `models/voice/` (`selected_model.json` + `<name>.joblib`, or `voice_model.joblib`). The voice model must predict exactly the classes `low`, `moderate`, `high`.
+* The older `VoiceFusionPayload` (`src/ai_model/voice/fusion_interface.py`, class probabilities) is a different, voice-internal shape and is **not** accepted by `fuse_modalities`.
+* Tests: `tests/test_fusion_engine.py`, `tests/test_voice_contract.py`, `tests/test_assessment_api.py`.

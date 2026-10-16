@@ -5,8 +5,11 @@
 This document details the planned user interface, interaction flows, recording components, and feedback dashboards for the **Multimodal Student Stress/Risk Assessment and Early-Intervention Support System**.
 
 > [!IMPORTANT]
-> **Implementation Status: Planned**
-> All UI wireframes, client-side workflows, and component specifications described in this document are architectural designs. No frontend source code (HTML, CSS, JavaScript, or frameworks) has been created during this documentation pass.
+> **Implementation Status: Basic implementation present**
+> `src/frontend/` (`index.html`, `app.js`, `style.css`) is a dependency-free UI: consent/privacy notice, questionnaire, daily habits,
+> in-browser voice recording or WAV upload, loading/validation/error states, overall and per-source results, suggestions,
+> and an evaluation panel, all with a non-clinical disclaimer. The assessment
+> API serves it at `/app/`. It is not the full dashboard envisioned below (no history or trends).
 
 ---
 
