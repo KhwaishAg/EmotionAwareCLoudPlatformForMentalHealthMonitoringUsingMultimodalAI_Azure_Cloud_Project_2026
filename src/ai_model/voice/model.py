@@ -246,7 +246,7 @@ class BaseVoiceClassifier:
 
             # Check numeric types
             for col in X_ordered.columns:
-                if not np.issubdtype(X_ordered[col].dtype, np.number):
+                if not pd.api.types.is_numeric_dtype(X_ordered[col]) or pd.api.types.is_bool_dtype(X_ordered[col]):
                     raise ModelInputError(
                         f"Feature column '{col}' has non-numeric dtype '{X_ordered[col].dtype}'."
                     )
