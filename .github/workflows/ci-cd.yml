@@ -1,0 +1,52 @@
+# CI/CD (free): run the full test suite on every push and pull request; on pushes to `main`
+# (or a manual run) build the bundle and deploy it to the existing free F1 App Service.
+#
+# One-time setup (see docs/azure_free_services.md):
+#   repository secret   AZURE_WEBAPP_PUBLISH_PROFILE  <- contents of dist/publish_profile.xml
+#   repository variable AZURE_WEBAPP_NAME             <- your app name
+# Until both exist the deploy job is skipped and only the tests run.
+name: ci-cd
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system audio library
+        run: sudo apt-get update && sudo apt-get install -y libsndfile1
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q
+
+  deploy:
+    needs: test
+    if: (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && vars.AZURE_WEBAPP_NAME != ''
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build deployment bundle
+        run: python scripts/package_for_azure.py
+      - name: Deploy to Azure App Service (F1)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: dist/azure_app.zip
