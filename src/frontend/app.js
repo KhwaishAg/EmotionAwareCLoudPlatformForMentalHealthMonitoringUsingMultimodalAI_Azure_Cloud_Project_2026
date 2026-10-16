@@ -1,21 +1,16 @@
 (function () {
   "use strict";
 
-  var qContainer = document.getElementById("q-container");
-  var bContainer = document.getElementById("b-container");
-  var submit = document.getElementById("submit");
-  var consent = document.getElementById("consent");
-  var errorBox = document.getElementById("error");
-  var loading = document.getElementById("loading");
-  var fileInput = document.getElementById("voice-file");
-  var recStart = document.getElementById("rec-start");
-  var recStop = document.getElementById("rec-stop");
-  var recClear = document.getElementById("rec-clear");
-  var recStatus = document.getElementById("rec-status");
+  var $ = function (id) { return document.getElementById(id); };
+  var qContainer = $("q-container"), bContainer = $("b-container");
+  var submit = $("submit"), next = $("next"), prev = $("prev"), consent = $("consent");
+  var errorBox = $("error"), loading = $("loading"), fileInput = $("voice-file");
+  var recStart = $("rec-start"), recStop = $("rec-stop"), recClear = $("rec-clear"), recStatus = $("rec-status");
   var schema = null;
   var cloud = {};            // which optional Azure features this deployment has switched on (from /status)
-  var lastBody = null;       // the inputs of the latest check-in, used only to tailor suggestions on screen
+  var current = 1, TOTAL_STEPS = 4;
   var recordedBase64 = null; // voice kept only in memory, never persisted
+  var IDLE_VOICE_TEXT = "No recording yet.";
 
   var BEHAVIOR_LABELS = {
     B1_sleep_hours: "Average hours of sleep per night",
@@ -33,52 +28,17 @@
     no_speech_detected: "Could not be used (not enough clear speech was recognised)",
     speech_service_unavailable: "Unavailable (Azure speech analysis could not be reached)"
   };
-  var DIMENSION_LABELS = {
-    overwhelm_dimension: "Feeling overwhelmed / unable to keep up (Q5–Q6)",
-    stress_impact_dimension: "Stress affecting relaxation, focus and sleep (Q7–Q9)",
-    emotional_strain_dimension: "Feeling emotionally overwhelmed right now (Q12)",
-    Q13_stress_aligned: "Feeling less able to handle responsibilities (Q13)",
-    stress_persistence_dimension: "How long stress stays noticeable (Q14)",
-    recovery_difficulty_dimension: "How slowly you recover after stress (Q16)",
-    stress_behavior_dimension: "Stress affecting tasks and decisions (Q17–Q20)",
-    academic_preparation_load: "Daily hours of academic preparation (Q3)",
-    speech_negative_tone: "Negative tone in what you said (voice)",
-    speech_positive_tone: "Positive tone in what you said (voice)"
+  var SOURCE_NAMES = { questionnaire: "Questionnaire", behavioral: "Daily habits", voice: "Voice" };
+  var EFFECT_TEXT = { increases_risk: "tends to raise the estimate", decreases_risk: "tends to lower the estimate", model_associated: "influences the estimate" };
+  var LEVEL_TITLE = { low: "Low stress indicators", moderate: "Moderate stress indicators", high: "High stress indicators" };
+  var CONSISTENCY_TEXT = {
+    consistent: "Your sources point the same way.",
+    moderate_difference: "Your sources differ somewhat.",
+    conflict: "Your sources point in clearly different directions."
   };
-  var DIRECTION_TEXT = { increases_risk: "raises the estimate", decreases_risk: "lowers the estimate", model_associated: "linked to the estimate" };
-  var BEHAVIOR_SHORT = {
-    B1_sleep_hours: "Sleep hours", B2_study_consistency: "Study routine consistency", B3_social_activity_freq: "Social activity",
-    B4_screen_time_hours: "Non-academic screen time", B5_routine_irregularity: "Irregular daily routine"
-  };
-  var SOURCE_TIPS = {
-    Exams: "Exams: plan revision in short blocks with breaks, and do one timed practice paper instead of re-reading.",
-    Academic_workload: "Workload: list this week's tasks, pick the top three, and ask early about extensions you may need.",
-    Assignments: "Assignments: start with a 25-minute first draft; finishing a rough version lowers the pressure.",
-    Projects: "Projects: agree on clear owners and small weekly milestones with your teammates.",
-    Placement_preparation: "Placements: set a fixed daily prep slot (for example 1 hour) so it doesn't spill into everything else.",
-    Internship_job_applications: "Applications: batch them on one or two days a week rather than checking constantly.",
-    Fear_of_not_getting_a_job: "Career worries: one conversation with your placement cell or a senior can make the path feel more concrete.",
-    Uncertainty_about_career: "Career uncertainty: write down two options you would be happy with; it reduces all-or-nothing thinking.",
-    Coding_technical_assessments: "Coding tests: practise a few timed problems a day; consistency beats long cramming sessions.",
-    Time_management: "Time management: block your day in a calendar, including breaks and sleep, and review it each evening.",
-    Lack_of_sleep: "Sleep: keep a fixed wake-up time and stop screens 30 minutes before bed.",
-    Financial_concerns: "Money worries: your college's student support or scholarship office can explain options confidentially.",
-    Family_expectations: "Family expectations: sharing a realistic plan with your family often eases the pressure on both sides.",
-    Competition_with_peers: "Peer comparison: compare with your own progress last month, not with others' highlights.",
-    Relationship_social_concerns: "Relationships: talk to someone you trust; you don't have to sort it out alone.",
-    Difficulty_balancing_academics_and_personal_life: "Balance: protect one small non-academic activity every day.",
-    Academic_performance_grades: "Grades: ask a faculty member which one or two changes would help most."
-  };
-
-  var ADVICE = {
-    low: ["Keep the routines that are working: regular sleep, movement and breaks.",
-          "Check in with yourself again if your workload or deadlines change."],
-    moderate: ["Plan short breaks and protect your sleep, especially around deadlines.",
-               "Break big tasks into small steps and talk with a friend, mentor or classmate.",
-               "Campus wellness resources can help if this feeling continues."],
-    high: ["Consider talking to someone you trust or your campus counselling service soon.",
-           "Prioritise sleep, food and short breaks, and ask for help with workload where possible.",
-           "If you feel unsafe or in crisis, contact local emergency services or a crisis helpline right away."]
+  var PATTERN_TEXT = {
+    masked_stress_possible: "Possible masked stress: your own answers give a lower result than your daily habits do. This is only a prompt to reflect (and the daily-habits model was trained on synthetic data), not a finding.",
+    self_report_higher: "You describe more stress than your daily habits show. Your own experience still counts."
   };
 
   function el(tag, props, children) {
@@ -88,90 +48,127 @@
     return node;
   }
   function pct(x) { return Math.round(x * 100) + "%"; }
-  function questionText(id) {
-    var items = (schema && schema.questionnaire_items) || [];
-    for (var i = 0; i < items.length; i++) { if (items[i].id === id) { return items[i].text; } }
-    return "";
-  }
-  function shorten(text, n) { return text.length > n ? text.slice(0, n - 1) + "…" : text; }
-  function factorLabel(name) {
-    if (DIMENSION_LABELS[name]) { return DIMENSION_LABELS[name]; }
-    if (BEHAVIOR_SHORT[name]) { return BEHAVIOR_SHORT[name] + " (daily habits)"; }
-    var m = /^(Q\d+)_(encoded|varies)$/.exec(name);
-    if (m) { return m[1] + ": " + shorten(questionText(m[1]), 70) + (m[2] === "varies" ? " (answered 'it varies')" : ""); }
-    m = /^Q10_(.+)$/.exec(name); if (m) { return "Stress source: " + m[1].replace(/_/g, " "); }
-    m = /^Q11_(.+)$/.exec(name); if (m) { return "Recent feeling: " + m[1].replace(/_/g, " "); }
-    m = /^Q25_(.+)$/.exec(name); if (m) { return "Biggest stress situation: " + m[1].replace(/_/g, " "); }
-    m = /^Q2_(.+)$/.exec(name); if (m) { return "Current situation: " + m[1].replace(/_/g, " "); }
-    if (name === "Q1_year_encoded") { return "Year of study"; }
-    return name.replace(/_/g, " ");
-  }
+  function showError(message) { errorBox.textContent = message; errorBox.hidden = !message; }
+  function failAt(step, message) { var e = new Error(message); e.step = step; return e; }
+  // The questionnaire's own answer labels contain a long dash ("1 - Not at all"); show them with a colon.
+  // Only the displayed text changes: the value sent to the model is untouched.
+  function plainOption(text) { return String(text).split(" " + String.fromCharCode(8212) + " ").join(": "); }
+
+  function shorten(text, n) { return text.length > n ? text.slice(0, n - 1) + "\u2026" : text; }
   function storage() { try { return window.localStorage; } catch (e) { return null; } }
   function anonId() {
     var store = storage(), id = null;
     try { id = store && store.getItem("checkin-anon-id"); } catch (e) { id = null; }
     if (!id) {
       id = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : null;
-      try { if (id && store) { store.setItem("checkin-anon-id", id); } } catch (e) { /* private mode: ID lasts this page only */ }
+      try { if (id && store) { store.setItem("checkin-anon-id", id); } } catch (e) { /* private mode: the ID lasts this page only */ }
     }
     return id;
   }
 
-  function showError(message) { errorBox.textContent = message; errorBox.hidden = !message; }
-  function updateSubmit() { submit.disabled = !consent.checked || !schema; }
-  consent.addEventListener("change", updateSubmit);
+  /* ---------- theme (light / dark), remembered in this browser only ---------- */
+  var root = document.documentElement, themeButton = $("theme");
+  function isDark() {
+    var set = root.getAttribute("data-theme");
+    return set ? set === "dark" : !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  function syncThemeLabel() { themeButton.textContent = isDark() ? "Light theme" : "Dark theme"; }
+  try { var saved = localStorage.getItem("theme"); if (saved === "light" || saved === "dark") { root.setAttribute("data-theme", saved); } } catch (e) { /* storage may be blocked */ }
+  syncThemeLabel();
+  themeButton.addEventListener("click", function () {
+    var nextTheme = isDark() ? "light" : "dark";
+    root.setAttribute("data-theme", nextTheme); syncThemeLabel();
+    try { localStorage.setItem("theme", nextTheme); } catch (e) { /* ignore */ }
+  });
+
+  /* ---------- step-by-step flow ---------- */
+  var stepPanels = document.querySelectorAll(".step"), stepperItems = document.querySelectorAll("#stepper li");
+  function updateButtons() {
+    next.disabled = !(consent.checked && schema);
+    submit.disabled = !(consent.checked && schema);
+  }
+  function goTo(n, scroll) {
+    current = Math.max(1, Math.min(TOTAL_STEPS, n));
+    Array.prototype.forEach.call(stepPanels, function (panel) { panel.classList.toggle("active", Number(panel.dataset.step) === current); });
+    Array.prototype.forEach.call(stepperItems, function (item) {
+      var k = Number(item.dataset.step);
+      item.classList.toggle("active", k === current); item.classList.toggle("done", k < current);
+    });
+    prev.hidden = current === 1; next.hidden = current === TOTAL_STEPS; submit.hidden = current !== TOTAL_STEPS;
+    showError("");
+    if (scroll) { $("assess").scrollIntoView({ block: "start" }); }
+  }
+  goTo(1, false);
+  consent.addEventListener("change", updateButtons);
+  next.addEventListener("click", function () {
+    if (current === 1 && !consent.checked) { showError("Please give consent to continue."); return; }
+    goTo(current + 1, true);
+  });
+  prev.addEventListener("click", function () { goTo(current - 1, true); });
+  Array.prototype.forEach.call(stepperItems, function (item) {
+    item.addEventListener("click", function () { if (item.classList.contains("done")) { goTo(Number(item.dataset.step), true); } });
+  });
+  $("use-q").addEventListener("change", function () { $("q-wrap").classList.toggle("off", !this.checked); });
+  $("use-b").addEventListener("change", function () { bContainer.classList.toggle("off", !this.checked); });
 
   /* ---------- form construction ---------- */
+  function refreshAnswered() {
+    if (!schema) { return; }
+    var done = schema.questionnaire_items.filter(function (item) {
+      return qContainer.querySelector('input[name="' + item.id + '"]:checked');
+    }).length, total = schema.questionnaire_items.length;
+    $("q-count").textContent = done + " of " + total + " answered";
+    $("q-progress").style.width = (done / total * 100) + "%";
+  }
   function buildQuestionnaire(items) {
-    qContainer.textContent = "";
+    qContainer.textContent = ""; qContainer.classList.remove("muted");
     items.forEach(function (item) {
-      var group = el("fieldset", {}, [el("legend", {}, [item.id + ". " + item.text])]);
-      if (item.type === "multi") {
-        item.options.forEach(function (option) {
-          group.appendChild(el("label", { className: "opt" },
-            [el("input", { type: "checkbox", value: option, name: item.id }), " " + option]));
-        });
-      } else {
-        var select = el("select", { name: item.id }, [el("option", { value: "" }, ["Select an answer"])]);
-        item.options.forEach(function (option) { select.appendChild(el("option", { value: option }, [option])); });
-        group.appendChild(select);
-      }
+      var group = el("fieldset", { className: "q-card", id: "card-" + item.id }, [
+        el("legend", {}, [el("span", { className: "q-num" }, [item.id + "."]), item.text])
+      ]);
+      var options = el("div", { className: "options" });
+      item.options.forEach(function (option) {
+        options.appendChild(el("label", { className: "option" }, [
+          el("input", { type: item.type === "multi" ? "checkbox" : "radio", value: option, name: item.id }),
+          el("span", {}, [plainOption(option)])
+        ]));
+      });
+      group.appendChild(options);
+      if (item.type === "multi") { group.appendChild(el("p", { className: "hint" }, ["Select all that apply."])); }
+      group.addEventListener("change", function () { group.classList.remove("missing"); refreshAnswered(); });
       qContainer.appendChild(group);
     });
+    refreshAnswered();
   }
   function buildBehavioral(fields) {
     bContainer.textContent = "";
     Object.keys(fields).forEach(function (name) {
-      var range = fields[name];
-      bContainer.appendChild(el("fieldset", {}, [
-        el("label", { className: "q" }, [BEHAVIOR_LABELS[name] || name]),
-        el("input", { type: "number", name: name, min: range.min, max: range.max, step: "0.5" }),
-        el("span", { className: "muted" }, ["Allowed range: " + range.min + " to " + range.max])
+      var range = fields[name], inputId = "habit-" + name;
+      bContainer.appendChild(el("div", { className: "habit" }, [
+        el("label", { htmlFor: inputId }, [BEHAVIOR_LABELS[name] || name]),
+        el("input", { id: inputId, type: "number", name: name, min: range.min, max: range.max, step: "0.5", inputMode: "decimal", placeholder: range.min + " to " + range.max }),
+        el("p", { className: "hint" }, ["Allowed range: " + range.min + " to " + range.max])
       ]));
     });
   }
 
   fetch("/schema").then(function (r) { if (!r.ok) { throw new Error("schema"); } return r.json(); })
     .then(function (data) {
-      schema = data; buildQuestionnaire(data.questionnaire_items); buildBehavioral(data.behavioral_fields); updateSubmit();
+      schema = data; buildQuestionnaire(data.questionnaire_items); buildBehavioral(data.behavioral_fields); updateButtons();
     })
     .catch(function () { qContainer.textContent = "Could not load the questionnaire. Is the assessment service running?"; });
 
   function collectQuestionnaire() {
     var responses = {}, missing = [];
     schema.questionnaire_items.forEach(function (item) {
-      if (item.type === "multi") {
-        var picked = Array.prototype.map.call(
-          qContainer.querySelectorAll('input[name="' + item.id + '"]:checked'), function (n) { return n.value; });
-        if (!picked.length) { missing.push(item.id); }
-        responses[item.id] = picked.join("; ");
-      } else {
-        var value = qContainer.querySelector('select[name="' + item.id + '"]').value;
-        if (!value) { missing.push(item.id); }
-        responses[item.id] = value;
-      }
+      var picked = Array.prototype.map.call(
+        qContainer.querySelectorAll('input[name="' + item.id + '"]:checked'), function (n) { return n.value; });
+      if (!picked.length) { missing.push(item.id); $("card-" + item.id).classList.add("missing"); }
+      responses[item.id] = item.type === "multi" ? picked.join("; ") : (picked[0] || "");
     });
-    if (missing.length) { throw new Error("Please answer every questionnaire item (missing: " + missing.join(", ") + ") or untick 'Include questionnaire'."); }
+    if (missing.length) {
+      throw failAt(2, "Please answer every questionnaire item (missing: " + missing.join(", ") + "), or switch the questionnaire off.");
+    }
     return { responses: responses };
   }
   function collectBehavioral() {
@@ -179,10 +176,10 @@
     Object.keys(schema.behavioral_fields).forEach(function (name) {
       var range = schema.behavioral_fields[name];
       var raw = bContainer.querySelector('input[name="' + name + '"]').value;
-      if (raw === "") { throw new Error("Please fill every daily-habits field or untick 'Include daily habits'."); }
+      if (raw === "") { throw failAt(3, "Please fill every daily-habits field, or switch daily habits off."); }
       var value = Number(raw);
       if (!isFinite(value) || value < range.min || value > range.max) {
-        throw new Error((BEHAVIOR_LABELS[name] || name) + " must be between " + range.min + " and " + range.max + ".");
+        throw failAt(3, (BEHAVIOR_LABELS[name] || name) + " must be between " + range.min + " and " + range.max + ".");
       }
       responses[name] = value;
     });
@@ -218,7 +215,11 @@
     for (var i = 0; i < bytes.length; i += step) { binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step)); }
     return btoa(binary);
   }
-  function setVoiceState(text, hasVoice) { recStatus.textContent = text; recStatus.className = "muted"; recClear.hidden = !hasVoice; }
+  function setVoiceState(text, hasVoice) { recStatus.textContent = text; recStatus.className = "muted small"; recClear.hidden = !hasVoice; }
+  function showRecording(seconds) {
+    recStatus.className = "recording small"; recStatus.textContent = "";
+    recStatus.appendChild(el("span", { className: "rec-dot" })); recStatus.appendChild(document.createTextNode("Recording, " + seconds + " s"));
+  }
 
   recStart.addEventListener("click", function () {
     showError("");
@@ -244,13 +245,12 @@
         }
       };
       fileInput.value = ""; recordedBase64 = null; recStart.hidden = true; recStop.hidden = false; recClear.hidden = true;
-      timer = setInterval(function () {
-        recStatus.className = "recording"; recStatus.textContent = "Recording… " + Math.round((Date.now() - started) / 1000) + " s";
-      }, 250);
+      showRecording(0);
+      timer = setInterval(function () { showRecording(Math.round((Date.now() - started) / 1000)); }, 500);
     }).catch(function () { showError("Microphone access was denied or unavailable. You can upload a WAV file instead."); });
   });
   recStop.addEventListener("click", function () { if (recorder) { recorder.stop(); } });
-  recClear.addEventListener("click", function () { recordedBase64 = null; fileInput.value = ""; setVoiceState("", false); });
+  recClear.addEventListener("click", function () { recordedBase64 = null; fileInput.value = ""; setVoiceState(IDLE_VOICE_TEXT, false); });
   fileInput.addEventListener("change", function () { if (fileInput.files[0]) { recordedBase64 = null; setVoiceState("File selected.", true); } });
 
   function readVoice() {
@@ -258,77 +258,77 @@
     var file = fileInput.files[0];
     if (!file) { return Promise.resolve(null); }
     return new Promise(function (resolve, reject) {
-      if (file.size > schema.max_audio_bytes) { reject(new Error("Audio file is too large.")); return; }
+      if (file.size > schema.max_audio_bytes) { reject(failAt(4, "Audio file is too large.")); return; }
       var reader = new FileReader();
       reader.onload = function () { resolve(String(reader.result).split(",")[1] || ""); };
-      reader.onerror = function () { reject(new Error("Could not read the audio file.")); };
+      reader.onerror = function () { reject(failAt(4, "Could not read the audio file.")); };
       reader.readAsDataURL(file);
     });
   }
 
-  /* ---------- suggestions: level-based core + tips tied to this check-in's own inputs and factors ---------- */
-  function personalTips(data) {
-    var tips = [], body = lastBody || {}, b = body.behavioral && body.behavioral.responses, q = body.questionnaire && body.questionnaire.responses;
-    if (b) {
-      if (b.B1_sleep_hours < 6) { tips.push("You reported about " + b.B1_sleep_hours + " h of sleep. Aim for 7–8 h with a fixed wake-up time; sleep is one of the biggest levers on stress."); }
-      if (b.B4_screen_time_hours > 4) { tips.push("Non-academic screen time is " + b.B4_screen_time_hours + " h a day. Try swapping one hour for a walk or time with friends."); }
-      if (b.B2_study_consistency <= 2) { tips.push("Your study routine feels inconsistent. A short, fixed daily study slot is easier to keep than long irregular sessions."); }
-      if (b.B5_routine_irregularity >= 4) { tips.push("Your days are quite irregular. Regular meal and sleep times give your body a steadier base under pressure."); }
-      if (b.B3_social_activity_freq <= 2) { tips.push("You don't socialise much right now. Even a short call or meal with a friend helps buffer stress."); }
+  /* ---------- result rendering (server text goes in via textContent only) ---------- */
+  function sourceCard(name, data) {
+    var detail = data.modality_details[name];
+    var card = el("div", { className: "source" + (detail ? "" : " off") });
+    var top = el("div", { className: "source-top" }, [el("h4", {}, [SOURCE_NAMES[name]])]);
+    card.appendChild(top);
+    if (detail) {
+      top.appendChild(el("span", { className: "tag " + detail.risk_level }, [detail.risk_level]));
+      var bar = el("div", { className: "bar " + detail.risk_level }, [el("span")]);
+      bar.firstChild.style.width = pct(detail.risk_score);
+      card.appendChild(bar);
+      card.appendChild(el("p", { className: "muted small" }, ["Score " + detail.risk_score.toFixed(2) + ", confidence " + pct(detail.confidence) + ", completeness " + pct(detail.completeness)]));
+      if (detail.source === "azure_speech_language") {
+        card.appendChild(el("p", { className: "muted small" }, ["From the tone of what you said (" + detail.sentiment + ")."]));
+        if (detail.transcript) { card.appendChild(el("p", { className: "quote" }, ["\u201c" + shorten(detail.transcript, 220) + "\u201d"])); }
+        if (detail.key_phrases && detail.key_phrases.length) { card.appendChild(el("p", { className: "muted small" }, ["Key phrases: " + detail.key_phrases.join(", ")])); }
+      }
+    } else {
+      card.appendChild(el("p", { className: "muted small" }, [STATUS_TEXT[data.modality_status[name]] || data.modality_status[name]]));
     }
-    if (q && q.Q10) {
-      q.Q10.split("; ").forEach(function (source) {
-        var key = source.replace(/[^A-Za-z]+/g, "_").replace(/^_|_$/g, "");
-        Object.keys(SOURCE_TIPS).forEach(function (k) { if (key.toLowerCase().indexOf(k.toLowerCase()) === 0 && tips.indexOf(SOURCE_TIPS[k]) < 0) { tips.push(SOURCE_TIPS[k]); } });
-      });
-    }
-    var v = data.modality_details.voice;
-    if (v && v.source === "azure_speech_language" && v.risk_level !== "low") {
-      tips.push("What you said sounded strained. Saying it out loud to someone you trust can help as much as writing it down.");
-    }
-    return tips.slice(0, 4);
+    return card;
   }
 
-  /* ---------- result rendering (server text goes in via textContent only) ---------- */
   function render(data) {
-    var a = data.assessment, level = document.getElementById("r-level");
-    var advice = document.getElementById("r-advice"); advice.textContent = "";
-    if (a.status !== "available") {
-      level.textContent = "No result"; level.className = "badge";
-      document.getElementById("r-summary").textContent = "None of the provided inputs could be analysed.";
-      document.getElementById("r-bar").style.width = "0%";
-      document.getElementById("r-conf").textContent = "See the source cards below for why.";
+    var a = data.assessment, available = a.status === "available";
+    var result = $("result"), summary = $("r-summary-card"), level = $("r-level");
+    result.hidden = false;
+
+    // headline: level, project-defined score, position on a three-band scale
+    summary.className = "card summary" + (available ? " " + a.risk_level : "");
+    if (available) {
+      $("r-title").textContent = LEVEL_TITLE[a.risk_level];
+      level.textContent = a.risk_level; level.className = "tag " + a.risk_level;
+      $("r-score-text").textContent = "Score " + a.risk_score.toFixed(2) + " on a 0 to 1 scale. This is a project-defined index, not a probability.";
+      $("r-scale").hidden = false; $("r-marker").style.left = pct(a.risk_score);
+      $("r-confidence").textContent = pct(a.confidence);
+      $("r-agreement").textContent = a.agreement.level === "not_applicable" ? "not applicable (one source)" : a.agreement.level;
+      $("r-completeness").textContent = pct(a.data_quality.completeness);
     } else {
-      level.textContent = a.risk_level; level.className = "badge " + a.risk_level;
-      document.getElementById("r-summary").textContent = "Estimated stress/risk level (indicator only).";
-      document.getElementById("r-bar").style.width = pct(a.risk_score);
-      var agreement = a.agreement.level === "not_applicable" ? "n/a (only one source)" : a.agreement.level;
-      document.getElementById("r-conf").textContent = "Confidence: " + pct(a.confidence) + " · Agreement between sources: " +
-        agreement + " · Data completeness: " + pct(a.data_quality.completeness) +
-        (a.modalities_used.length === 1 ? " · based on a single source" : " · based on " + a.modalities_used.length + " sources");
-      var core = ADVICE[a.risk_level] || [];
-      // keep the crisis line for "high", then add tips tied to this check-in
-      personalTips(data).slice(0, Math.max(0, 6 - core.length)).concat(core).forEach(function (t) { advice.appendChild(el("li", {}, [t])); });
+      $("r-title").textContent = "No result";
+      level.textContent = ""; level.className = "tag";
+      $("r-score-text").textContent = "None of the provided inputs could be analysed. The source cards below say why.";
+      $("r-scale").hidden = true;
+      $("r-confidence").textContent = "n/a"; $("r-agreement").textContent = "n/a"; $("r-completeness").textContent = "n/a";
     }
-    var cards = document.getElementById("r-cards"); cards.textContent = "";
-    ["questionnaire", "behavioral", "voice"].forEach(function (name) {
-      var detail = data.modality_details[name], card = el("div", { className: "mini" }, [el("h3", {}, [name])]);
-      if (detail) {
-        card.appendChild(el("span", { className: "badge " + detail.risk_level }, [detail.risk_level]));
-        card.appendChild(el("p", { className: "muted" }, ["Score " + pct(detail.risk_score) + " · confidence " +
-          pct(detail.confidence) + " · completeness " + pct(detail.completeness)]));
-        if (detail.source === "azure_speech_language") {
-          card.appendChild(el("p", { className: "muted" }, ["From the tone of what you said (" + detail.sentiment + ")."]));
-          if (detail.transcript) { card.appendChild(el("p", { className: "quote" }, ["“" + shorten(detail.transcript, 220) + "”"])); }
-          if (detail.key_phrases && detail.key_phrases.length) { card.appendChild(el("p", { className: "muted" }, ["Key phrases: " + detail.key_phrases.join(", ")])); }
-        }
-      } else {
-        card.appendChild(el("p", { className: "muted" }, [STATUS_TEXT[data.modality_status[name]] || data.modality_status[name]]));
-      }
-      cards.appendChild(card);
-    });
-    var emotionBox = document.getElementById("r-emotion"), emotionBody = document.getElementById("r-emotion-body");
-    var ve = data.voice_emotion; emotionBox.hidden = !ve; emotionBody.textContent = "";
+
+    // per-source cards
+    var cards = $("r-cards"); cards.textContent = "";
+    ["questionnaire", "behavioral", "voice"].forEach(function (name) { cards.appendChild(sourceCard(name, data)); });
+
+    // cross-source consistency
+    var cbox = $("r-consistency"), cbody = $("r-consistency-body"), cons = a.consistency;
+    cbox.hidden = !available; cbody.textContent = "";
+    cbox.classList.toggle("flag", !!(cons && cons.applicable && cons.pattern !== "none"));
+    if (cons && cons.applicable) {
+      cbody.textContent = (CONSISTENCY_TEXT[cons.status] || "") + " " + (PATTERN_TEXT[cons.pattern] || "");
+    } else if (cons) {
+      cbody.textContent = "Only one source was used, so there is nothing to compare. Adding another source (for example the questionnaire plus daily habits) lets the app check whether they agree, including a possible masked-stress pattern.";
+    }
+
+    // separate, experimental vocal emotion
+    var emotionBox = $("r-emotion"), emotionBody = $("r-emotion-body"), ve = data.voice_emotion;
+    emotionBox.hidden = !ve; emotionBody.textContent = "";
     if (ve) {
       if (ve.status === "available" && ve.result) {
         var ranked = Object.keys(ve.result.probabilities).sort(function (x, y) { return ve.result.probabilities[y] - ve.result.probabilities[x]; });
@@ -338,93 +338,115 @@
         emotionBody.textContent = STATUS_TEXT[ve.status] ? "Not available: " + STATUS_TEXT[ve.status].replace(/^Unavailable \(|\)$/g, "") : "Not available.";
       }
     }
-    var tbody = document.getElementById("r-factors"); tbody.textContent = "";
-    a.key_factors.forEach(function (f) {
-      tbody.appendChild(el("tr", {}, [el("td", { title: f.feature }, [factorLabel(f.feature)]), el("td", {}, [f.modality]),
-        el("td", {}, [DIRECTION_TEXT[f.direction] || f.direction.replace(/_/g, " ")]), el("td", {}, [pct(f.contribution)])]));
+
+    // personal insights
+    var insightList = $("r-insights"); insightList.textContent = "";
+    (data.insights || []).forEach(function (item) { insightList.appendChild(el("li", {}, [item.evidence.join(" ")])); });
+    $("r-insights-empty").hidden = !available || (data.insights || []).length > 0;
+
+    // personalized recommendations (produced on the server from the person's own answers)
+    var advice = $("r-advice"); advice.textContent = "";
+    (data.recommendations || []).forEach(function (rec) {
+      var box = el("div", { className: "rec" + (rec.theme === "support" ? " support" : "") + (/^(masked_stress|self_report_higher)$/.test(rec.theme) ? " priority" : "") }, [
+        el("h4", {}, [rec.title]), el("p", {}, [rec.advice])
+      ]);
+      if (rec.tips && rec.tips.length) {
+        var tipList = el("ul", { className: "tips" });
+        rec.tips.forEach(function (tip) { tipList.appendChild(el("li", {}, [tip])); });
+        box.appendChild(tipList);
+      }
+      if (rec.because && rec.because.length) { box.appendChild(el("p", { className: "why" }, ["Based on: " + rec.because.join(" ")])); }
+      advice.appendChild(box);
     });
-    document.getElementById("r-disclaimer").textContent = data.disclaimer;
+
+    // model-wide factors
+    var tbody = $("r-factors"); tbody.textContent = "";
+    a.key_factors.forEach(function (f) {
+      var from = f.modality.split(",").map(function (m) { return SOURCE_NAMES[m] || m; }).join(" + ");
+      tbody.appendChild(el("tr", {}, [el("td", {}, [f.label || f.feature]), el("td", {}, [from]),
+        el("td", {}, [EFFECT_TEXT[f.direction] || "influences the estimate"]), el("td", {}, [pct(f.contribution)])]));
+    });
+    $("r-disclaimer").textContent = data.disclaimer;
     var saved = { queued: "Summary sent to your history.", saved: "Summary saved to your history.",
                   failed: "Your history could not be updated this time.", unavailable: "History is not enabled here." }[data.history_status];
-    if (saved) { document.getElementById("h-status").textContent = saved; loadHistory(1500); }
-    var result = document.getElementById("result"); result.hidden = false; result.scrollIntoView({ behavior: "smooth" });
+    if (saved) { $("h-status").textContent = saved; loadHistory(1500); }
+    result.scrollIntoView({ block: "start" });
   }
 
   /* ---------- submit ---------- */
-  document.getElementById("form").addEventListener("submit", function (event) {
+  $("form").addEventListener("submit", function (event) {
     event.preventDefault(); showError("");
-    if (!consent.checked) { showError("Please give consent to continue."); return; }
+    if (!consent.checked) { goTo(1, true); showError("Please give consent to continue."); return; }
     var body = {};
     try {
-      if (document.getElementById("use-q").checked) { body.questionnaire = collectQuestionnaire(); }
-      if (document.getElementById("use-b").checked) { body.behavioral = collectBehavioral(); }
-    } catch (e) { showError(e.message); return; }
+      if ($("use-q").checked) { body.questionnaire = collectQuestionnaire(); }
+      if ($("use-b").checked) { body.behavioral = collectBehavioral(); }
+    } catch (e) { goTo(e.step || current, true); showError(e.message); return; }
     submit.disabled = true; loading.hidden = false;
     readVoice().then(function (audio) {
       if (audio) {
         body.voice = { audio_base64: audio };
-        if (cloud.speech_content && document.getElementById("use-cloud-speech").checked) { body.voice.cloud_speech = true; }
+        if (cloud.speech_content && $("use-cloud-speech").checked) { body.voice.cloud_speech = true; }
       }
-      if (cloud.history && document.getElementById("save-history").checked) { body.history = { anon_id: anonId() }; }
-      lastBody = body;
-      if (!body.questionnaire && !body.behavioral && !body.voice) { throw new Error("Please include at least one input."); }
+      if (cloud.history && $("save-history").checked) { body.history = { anon_id: anonId() }; }
+      if (!body.questionnaire && !body.behavioral && !body.voice) { throw failAt(2, "Please include at least one input."); }
       return fetch("/assessment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     }).then(function (r) {
       if (r.status === 422) { throw new Error("Some answers were not valid. Please check the form and try again."); }
       if (!r.ok) { throw new Error("The service could not complete the assessment. Please try again later."); }
       return r.json();
-    }).then(render).catch(function (e) { showError(e.message || "Something went wrong."); })
-      .then(function () { loading.hidden = true; updateSubmit(); });
+    }).then(render).catch(function (e) { if (e.step) { goTo(e.step, true); } showError(e.message || "Something went wrong."); })
+      .then(function () { loading.hidden = true; updateButtons(); });
   });
 
   /* ---------- optional Azure features + history ---------- */
-  var historyCard = document.getElementById("history-card");
+  var historyCard = $("history-card");
   function historyQuery() { var id = anonId(); return id ? "?anon_id=" + encodeURIComponent(id) : ""; }
   function renderHistory(d) {
-    var rows = document.getElementById("h-rows"); rows.textContent = "";
+    var rows = $("h-rows"); rows.textContent = "";
     d.items.forEach(function (item) {
       rows.appendChild(el("tr", {}, [el("td", {}, [new Date(item.created_at).toLocaleString()]),
-        el("td", {}, [el("span", { className: "badge " + item.risk_level }, [item.risk_level || "n/a"])]),
-        el("td", {}, [item.risk_score == null ? "n/a" : pct(item.risk_score)]), el("td", {}, [(item.modalities_used || []).join(", ")])]));
+        el("td", {}, [el("span", { className: "tag " + (item.risk_level || "") }, [item.risk_level || "n/a"])]),
+        el("td", {}, [item.risk_score == null ? "n/a" : Number(item.risk_score).toFixed(2)]), el("td", {}, [(item.modalities_used || []).join(", ")])]));
     });
     var t = d.trend, text = {
       not_enough_data: d.items.length ? "Save a few more check-ins to see a trend." : "No saved check-ins yet.",
-      rising: "Your latest estimate is higher than your recent average (" + pct(t.latest || 0) + " vs " + pct(t.previous_average || 0) + ").",
-      falling: "Your latest estimate is lower than your recent average (" + pct(t.latest || 0) + " vs " + pct(t.previous_average || 0) + ").",
+      rising: "Your latest estimate is higher than your recent average (" + Number(t.latest || 0).toFixed(2) + " vs " + Number(t.previous_average || 0).toFixed(2) + ").",
+      falling: "Your latest estimate is lower than your recent average (" + Number(t.latest || 0).toFixed(2) + " vs " + Number(t.previous_average || 0).toFixed(2) + ").",
       stable: "Your estimates have been fairly stable recently."
     }[t.direction];
-    document.getElementById("h-trend").textContent = text || "";
+    $("h-trend").textContent = text || "";
   }
   function loadHistory(delay) {
     if (!cloud.history) { return; }
     setTimeout(function () {
       fetch("/history" + historyQuery()).then(function (r) { if (!r.ok) { throw new Error(); } return r.json(); })
-        .then(renderHistory).catch(function () { document.getElementById("h-trend").textContent = "History is unavailable right now."; });
+        .then(renderHistory).catch(function () { $("h-trend").textContent = "History is unavailable right now."; });
     }, delay || 0);
   }
-  var deleteArmed = false, deleteButton = document.getElementById("h-delete");
+  var deleteArmed = false, deleteButton = $("h-delete");
   deleteButton.addEventListener("click", function () {
     if (!deleteArmed) { deleteArmed = true; deleteButton.textContent = "Click again to delete everything"; return; }
     deleteArmed = false; deleteButton.textContent = "Delete my history";
     fetch("/history" + historyQuery(), { method: "DELETE" }).then(function (r) { if (!r.ok) { throw new Error(); } return r.json(); })
-      .then(function (d) { document.getElementById("h-status").textContent = "Deleted " + d.deleted + " saved check-in(s)."; loadHistory(); })
-      .catch(function () { document.getElementById("h-status").textContent = "Could not delete right now; please try again."; });
+      .then(function (d) { $("h-status").textContent = "Deleted " + d.deleted + " saved check-in(s)."; loadHistory(); })
+      .catch(function () { $("h-status").textContent = "Could not delete right now; please try again."; });
   });
-  document.getElementById("h-refresh").addEventListener("click", function () { loadHistory(); });
+  $("h-refresh").addEventListener("click", function () { loadHistory(); });
 
   fetch("/status").then(function (r) { return r.json(); }).then(function (d) {
     cloud = d.cloud || {};
     if (cloud.hosted) {
-      document.getElementById("privacy-where").firstChild.textContent =
-        "Your answers are sent to this app's assessment service on Microsoft Azure App Service, used to compute the result, and ";
+      $("privacy-where").firstChild.textContent = "Your answers are sent to this app's assessment service on Microsoft Azure App Service, used to compute the result, and are ";
     }
     if (cloud.speech_content && !(d.models && d.models.voice)) {
-      document.getElementById("cloud-speech-opt").hidden = false; document.getElementById("cloud-speech-note").hidden = false;
-      document.getElementById("voice-help").textContent = "No acoustic stress model is trained yet; tick the option below to use the tone of what you say instead.";
+      $("cloud-speech-opt").hidden = false; $("cloud-speech-note").hidden = false;
+      $("voice-help").textContent = "No acoustic stress model is trained yet; tick the option below to use the tone of what you say instead.";
     }
     if (cloud.history) {
-      document.getElementById("history-opt").hidden = false; document.getElementById("history-note").hidden = false; historyCard.hidden = false;
-      document.getElementById("h-id-note").textContent = cloud.signed_in_history
+      $("history-opt").hidden = false; $("history-note").hidden = false; historyCard.hidden = false;
+      $("privacy-tail").textContent = " unless you choose to save a summary below. Results are not cached by the browser.";
+      $("h-id-note").textContent = cloud.signed_in_history
         ? "History is linked to your signed-in account." : "History is linked to a random ID stored in this browser only.";
       loadHistory();
     }
@@ -432,7 +454,7 @@
 
   /* ---------- evaluation transparency ---------- */
   fetch("/evaluation").then(function (r) { return r.json(); }).then(function (d) {
-    var body = document.getElementById("eval-body"); body.textContent = "";
+    var body = $("eval-body"); body.textContent = "";
     var q = d.questionnaire, b = d.behavioral, v = d.voice;
     [["Questionnaire", q.model + " on " + q.respondents + " real responses; cross-validated macro-F1 " +
         (q.cross_validated_macro_f1 == null ? "n/a" : q.cross_validated_macro_f1.toFixed(2)) + ". " + q.caveat],
@@ -443,5 +465,5 @@
      ["Voice stress risk", v.trained ? "Trained model present (" + v.dataset_kind + "). " + (v.note || "") : v.caveat]
     ].forEach(function (row) { body.appendChild(el("p", {}, [el("strong", {}, [row[0] + ": "]), row[1]])); });
     body.appendChild(el("p", {}, [d.disclaimer]));
-  }).catch(function () { document.getElementById("eval-body").textContent = "Evaluation summary unavailable."; });
+  }).catch(function () { $("eval-body").textContent = "Evaluation summary unavailable."; });
 })();

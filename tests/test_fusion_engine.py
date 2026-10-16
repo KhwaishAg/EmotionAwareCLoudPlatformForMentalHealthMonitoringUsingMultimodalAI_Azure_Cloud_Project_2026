@@ -128,3 +128,57 @@ class TestMalformedInputs:
         result["key_factors"] = [{"feature": "x"}]
         with pytest.raises(ValueError, match="key factor"):
             validate_modality_result(result)
+
+
+class TestAgreementAndConsistency:
+    def test_single_source_confidence_is_not_boosted_or_penalised(self):
+        fused = fuse_modalities(questionnaire=make_result("questionnaire", 0.2, confidence=0.7))
+        assert fused["confidence"] == pytest.approx(0.7)
+
+    def test_single_source_keeps_numeric_contract_but_is_not_applicable(self):
+        fused = fuse_modalities(questionnaire=make_result("questionnaire", 0.2))
+        assert fused["agreement"] == {"score": 1.0, "level": "not_applicable", "sources": 1}
+        assert fused["consistency"]["applicable"] is False and fused["consistency"]["status"] == "single_source"
+        assert fused["consistency"]["pattern"] == "none"
+
+    def test_unavailable_results_report_agreement_not_applicable(self):
+        empty = fuse_modalities()
+        assert empty["agreement"] == {"score": 0.0, "level": "not_applicable", "sources": 0}
+        assert empty["consistency"]["status"] == "no_sources"
+        zero = fuse_modalities(voice=make_result("voice", 0.5, confidence=0.0))
+        assert zero["agreement"]["level"] == "not_applicable" and zero["agreement"]["sources"] == 1
+
+    def test_two_sources_are_compared(self):
+        close = fuse_modalities(questionnaire=make_result("questionnaire", 0.50), behavioral=make_result("behavioral", 0.55))
+        assert close["agreement"]["level"] == "high" and close["consistency"]["status"] == "consistent"
+        assert close["consistency"]["applicable"] is True and close["consistency"]["pattern"] == "none"
+
+    @pytest.mark.parametrize("q,b,status", [(0.50, 0.60, "consistent"), (0.40, 0.65, "moderate_difference"), (0.10, 0.80, "conflict")])
+    def test_consistency_status_bands(self, q, b, status):
+        fused = fuse_modalities(questionnaire=make_result("questionnaire", q), behavioral=make_result("behavioral", b))
+        assert fused["consistency"]["status"] == status
+        assert fused["consistency"]["gap"] == pytest.approx(b - q)
+
+    def test_masked_stress_needs_two_sources_and_low_self_report(self):
+        masked = fuse_modalities(questionnaire=make_result("questionnaire", 0.15), behavioral=make_result("behavioral", 0.80))
+        assert masked["consistency"]["pattern"] == "masked_stress_possible"
+        # the same low questionnaire alone can never show it
+        assert fuse_modalities(questionnaire=make_result("questionnaire", 0.15))["consistency"]["pattern"] == "none"
+        # a high self-report is not "masked"
+        high = fuse_modalities(questionnaire=make_result("questionnaire", 0.75), behavioral=make_result("behavioral", 0.95))
+        assert high["consistency"]["pattern"] == "none"
+
+    def test_masked_pattern_uses_voice_too_and_ignores_voice_vs_behavioral(self):
+        with_voice = fuse_modalities(questionnaire=make_result("questionnaire", 0.2), voice=make_result("voice", 0.7))
+        assert with_voice["consistency"]["pattern"] == "masked_stress_possible"
+        no_self_report = fuse_modalities(voice=make_result("voice", 0.1), behavioral=make_result("behavioral", 0.9))
+        assert no_self_report["consistency"]["status"] == "conflict" and no_self_report["consistency"]["pattern"] == "none"
+
+    def test_self_report_higher_pattern(self):
+        fused = fuse_modalities(questionnaire=make_result("questionnaire", 0.85), behavioral=make_result("behavioral", 0.25))
+        assert fused["consistency"]["pattern"] == "self_report_higher"
+
+    def test_disagreement_lowers_confidence_but_single_source_is_unchanged(self):
+        agree = fuse_modalities(questionnaire=make_result("questionnaire", 0.5, 0.8), behavioral=make_result("behavioral", 0.52, 0.8))
+        clash = fuse_modalities(questionnaire=make_result("questionnaire", 0.1, 0.8), behavioral=make_result("behavioral", 0.9, 0.8))
+        assert clash["confidence"] < agree["confidence"]

@@ -47,6 +47,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from src.ai_model.behavioral.behavioral_schema import FIELD_RANGES, REQUIRED_BEHAVIORAL_FIELDS
 from src.ai_model.behavioral.predict import predict_behavioral
+from src.ai_model.fusion.explanations import build_recommendations, label_key_factors, personal_insights
 from src.ai_model.fusion.fusion_engine import fuse_modalities
 from src.ai_model.questionnaire.predict import REQUIRED_QUESTION_FIELDS, predict_questionnaire
 from src.cloud import events as cloud_events
@@ -364,6 +365,25 @@ def _run_voice_emotion(payload: Optional[VoiceInput]) -> tuple[Optional[dict], O
 VOICE_DETAIL_EXTRAS = ("source", "sentiment", "transcript", "key_phrases", "caveat")
 
 
+def _explain(request: "AssessmentRequest", fused: dict, questionnaire_result: Optional[dict],
+             behavioral_result: Optional[dict], voice_result: Optional[dict]) -> tuple[list, list]:
+    """Readable factor labels, personal insights and recommendations. Never lets an explanation failure break the assessment."""
+    try:
+        fused["key_factors"] = label_key_factors(fused.get("key_factors", []))
+        if fused.get("status") != "available":
+            return [], []
+        insights = personal_insights(
+            request.questionnaire.responses if questionnaire_result is not None and request.questionnaire else None,
+            request.behavioral.responses if behavioral_result is not None and request.behavioral else None,
+            voice_result,
+        )
+        return insights, build_recommendations(insights, fused)
+    except Exception:  # pragma: no cover - defensive; the message must never include user data
+        logger.exception("Could not build explanations.")
+        return [], []
+
+
+
 def _principal(http_request: Optional[Request]) -> Optional[str]:
     return http_request.headers.get("x-ms-client-principal-id") if http_request is not None else None
 
@@ -420,6 +440,7 @@ def assess(request: AssessmentRequest, http_request: Request) -> dict:
         logger.exception("Fusion contract validation failed unexpectedly.")
         raise HTTPException(status_code=500, detail="Assessment could not be completed.") from None
 
+    insights, recommendations = _explain(request, fused, questionnaire_result, behavioral_result, voice_result)
     details = {
         name: {
             "risk_score": result["risk_score"],
@@ -438,6 +459,9 @@ def assess(request: AssessmentRequest, http_request: Request) -> dict:
     return {
         "assessment": fused,
         "modality_details": details,
+        # Personal: built from this person's own answers (not model-wide importances). See fusion/explanations.py.
+        "insights": insights,
+        "recommendations": recommendations,
         # Experimental, acted-speech emotion category: separate from stress risk and never fused.
         "voice_emotion": None if emotion_status is None else {"status": emotion_status, "result": emotion_result},
         "modality_status": {

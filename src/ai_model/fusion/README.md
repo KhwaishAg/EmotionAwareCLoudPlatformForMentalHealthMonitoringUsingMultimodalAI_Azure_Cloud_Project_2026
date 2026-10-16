@@ -42,3 +42,25 @@ The executable integration tests include explicitly labeled mock voice and behav
 * Voice produces this contract through `src.ai_model.voice.predict.predict_voice_from_features` (extracted features) or `predict_voice_contract_from_audio` (WAV file). Both raise `VoiceModelNotTrainedError` until a model exists in `models/voice/` (`selected_model.json` + `<name>.joblib`, or `voice_model.joblib`). The voice model must predict exactly the classes `low`, `moderate`, `high`.
 * The older `VoiceFusionPayload` (`src/ai_model/voice/fusion_interface.py`, class probabilities) is a different, voice-internal shape and is **not** accepted by `fuse_modalities`.
 * Tests: `tests/test_fusion_engine.py`, `tests/test_voice_contract.py`, `tests/test_assessment_api.py`.
+
+## Cross-modal consistency and possible masked stress
+
+`fuse_modalities` also returns `consistency` (`calculate_consistency`), which only applies with two or more usable sources:
+
+| Field | Meaning |
+|---|---|
+| `applicable` / `status` | `false` with `no_sources` or `single_source`; otherwise `consistent` (gap < 0.20), `moderate_difference` (< 0.40) or `conflict` (>= 0.40), where gap = largest minus smallest source risk score |
+| `pattern` | `masked_stress_possible`: the questionnaire (self-report) is low/moderate and the average of the behavioral/voice sources is at least 0.30 higher. `self_report_higher`: the reverse. Otherwise `none` |
+| `sources` | each source's score and level, for display |
+
+Thresholds are project-defined, not clinical, and a pattern is a prompt to reflect on, never a finding. It cannot appear from one source. In practice the behavioral model is trained on synthetic data and voice has no stress model, so the flag is only as meaningful as those inputs.
+
+## Personal explanations (`explanations.py`)
+
+`key_factors` are model-wide importances (the same for every user), so on their own they cannot say what matters for one person. `explanations.py` adds, without changing any model output:
+
+* `describe_feature`: a plain-language label (and related themes) for every questionnaire, daily-habit and voice feature, e.g. `Q9_encoded` -> "Stress affecting your sleep".
+* `personal_insights`: adverse areas found in the person's OWN answers (sleep, workload, focus, screen time, routine ...), with their answers quoted back.
+* `build_recommendations`: ranks those areas by severity (70%) and the model's reliance on that area (30%, from the fused `key_factors`), attaches general self-care advice and the reason, and adds a masked-stress prompt when flagged. Sleep advice therefore appears only when sleep answers are adverse.
+
+The API returns them as `insights` and `recommendations`, and adds a `label` to each key factor. Tests: `tests/test_explanations.py`, `tests/test_fusion_engine.py`.

@@ -14,6 +14,9 @@ if str(PROJECT_ROOT) not in sys.path:  # supports `python src/.../fusion_engine.
 
 ALLOWED_MODALITIES = ("questionnaire", "voice", "behavioral")
 RISK_LEVELS = ("low", "moderate", "high")
+CONSISTENT_GAP = 0.20   # risk-score gap below which sources are "consistent"
+CONFLICT_GAP = 0.40     # gap at/above which sources "conflict"
+MASKED_GAP = 0.30       # objective sources this much higher than self-report -> possible masked stress
 REQUIRED_FIELDS = {"modality", "risk_score", "risk_level", "confidence", "available_features", "total_features", "key_factors", "data_quality"}
 RESULTS_PATH = PROJECT_ROOT / "results" / "fusion" / "fusion_test_results.json"
 
@@ -89,6 +92,34 @@ def calculate_agreement(results: Mapping[str, Mapping[str, Any]]) -> Dict[str, A
     return {"score": score, "level": level, "sources": len(scores)}
 
 
+def calculate_consistency(results: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    """Cross-modal consistency, including a possible "masked stress" pattern. Needs two or more real sources.
+
+    * gap = largest minus smallest source risk score. consistent < 0.20 <= moderate_difference < 0.40 <= conflict.
+    * pattern ``masked_stress_possible``: the self-report (questionnaire) is low/moderate while the average of the
+      behavioral/voice sources is at least 0.30 higher. ``self_report_higher`` is the reverse.
+    Thresholds are project-defined, not clinical. A pattern is an indicator to reflect on, never a finding.
+    """
+    if len(results) < 2:
+        return {"applicable": False, "status": "no_sources" if not results else "single_source", "pattern": "none",
+                "gap": None, "sources": {},
+                "note": "Cross-source consistency (including possible masked stress) needs two or more sources."}
+    scores = {name: float(item["risk_score"]) for name, item in results.items()}
+    gap = max(scores.values()) - min(scores.values())
+    status = "consistent" if gap < CONSISTENT_GAP else "moderate_difference" if gap < CONFLICT_GAP else "conflict"
+    pattern = "none"
+    if "questionnaire" in results:
+        objective = [scores[name] for name in ("behavioral", "voice") if name in scores]
+        if objective:
+            difference = float(np.mean(objective)) - scores["questionnaire"]
+            if difference >= MASKED_GAP and results["questionnaire"]["risk_level"] in ("low", "moderate"):
+                pattern = "masked_stress_possible"
+            elif -difference >= MASKED_GAP:
+                pattern = "self_report_higher"
+    return {"applicable": True, "status": status, "pattern": pattern, "gap": float(gap),
+            "sources": {name: {"risk_score": scores[name], "risk_level": results[name]["risk_level"]} for name in scores}}
+
+
 def calculate_fused_confidence(results: Mapping[str, Mapping[str, Any]], weights: Mapping[str, float], agreement_score: float) -> float:
     weighted_confidence = sum(results[name]["confidence"] * weights[name] for name in results)
     return float(np.clip(weighted_confidence * (.5 + .5 * agreement_score), 0.0, 1.0))
@@ -146,7 +177,8 @@ def fuse_modalities(questionnaire=None, voice=None, behavioral=None) -> dict:
         return {"modality": "multimodal_fusion", "risk_score": None, "risk_level": None, "confidence": 0.0,
                 **quality, "key_factors": [], "modalities_used": [], "modality_scores": {},
                 "modality_confidences": {}, "modality_weights": {}, "normalized_weights": {},
-                "agreement": {"score": 0.0, "level": "low"}, "status": "fusion_unavailable"}
+                "agreement": {"score": 0.0, "level": "not_applicable", "sources": 0},
+                "consistency": calculate_consistency({}), "status": "fusion_unavailable"}
     raw_weights = {name: calculate_modality_weight(item) for name, item in usable.items()}
     normalized = normalize_weights(raw_weights)
     if not normalized:
@@ -155,7 +187,8 @@ def fuse_modalities(questionnaire=None, voice=None, behavioral=None) -> dict:
         return {"modality": "multimodal_fusion", "risk_score": None, "risk_level": None, "confidence": 0.0,
                 **quality, "key_factors": [], "modalities_used": list(usable), "modality_scores": {name: item["risk_score"] for name, item in usable.items()},
                 "modality_confidences": {name: item["confidence"] for name, item in usable.items()}, "modality_weights": raw_weights,
-                "normalized_weights": {}, "agreement": {"score": 0.0, "level": "low"}, "status": "fusion_unavailable_zero_weight"}
+                "normalized_weights": {}, "agreement": {"score": 0.0, "level": "not_applicable", "sources": len(usable)},
+                "consistency": calculate_consistency(usable), "status": "fusion_unavailable_zero_weight"}
     risk = calculate_fused_risk(usable, normalized)
     agreement = calculate_agreement(usable)
     confidence = calculate_fused_confidence(usable, normalized, agreement["score"])
@@ -164,7 +197,8 @@ def fuse_modalities(questionnaire=None, voice=None, behavioral=None) -> dict:
             **quality, "key_factors": aggregate_key_factors(usable, normalized), "modalities_used": list(usable),
             "modality_scores": {name: item["risk_score"] for name, item in usable.items()},
             "modality_confidences": {name: item["confidence"] for name, item in usable.items()}, "modality_weights": raw_weights,
-            "normalized_weights": normalized, "agreement": agreement, "status": "available"}
+            "normalized_weights": normalized, "agreement": agreement,
+            "consistency": calculate_consistency(usable), "status": "available"}
 
 
 def _mock(modality: str, score: float, confidence: float, feature: str) -> dict:
