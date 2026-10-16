@@ -49,6 +49,12 @@ from src.ai_model.behavioral.behavioral_schema import FIELD_RANGES, REQUIRED_BEH
 from src.ai_model.behavioral.predict import predict_behavioral
 from src.ai_model.fusion.fusion_engine import fuse_modalities
 from src.ai_model.questionnaire.predict import REQUIRED_QUESTION_FIELDS, predict_questionnaire
+from src.cloud import events as cloud_events
+from src.cloud import history as cloud_history
+from src.cloud.config import is_hosted, load_settings
+from src.cloud.http import CloudServiceError
+from src.cloud.voice_content import NoSpeechError
+from src.cloud.voice_content import assess_audio as assess_speech_content
 
 try:
     from src.ai_model.voice.predict import (
@@ -126,6 +132,8 @@ def _is_authorized(request: Request) -> bool:
     credentials = _access_credentials()
     if credentials is None or request.url.path == "/health":  # /health lets a host probe liveness; it exposes nothing
         return True
+    if request.url.path == "/events":  # Event Grid webhook: protected by its own shared secret instead
+        return True
     header = request.headers.get("authorization", "")
     if not header.lower().startswith("basic "):
         return False
@@ -190,6 +198,9 @@ class VoiceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     audio_base64: Optional[str] = None
     features: Optional[dict[str, Any]] = None
+    # Opt-in: while no acoustic stress model is trained, send the recording to Azure AI Speech + Language
+    # (when configured) and use the tone of what was said as the voice signal.
+    cloud_speech: bool = False
 
     @model_validator(mode="after")
     def exactly_one_source(self) -> "VoiceInput":
@@ -200,11 +211,19 @@ class VoiceInput(BaseModel):
         return self
 
 
+class HistoryOptIn(BaseModel):
+    """Opt-in to saving an anonymised summary. anon_id is a random UUID the browser generated."""
+
+    model_config = ConfigDict(extra="forbid")
+    anon_id: Optional[str] = None
+
+
 class AssessmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     questionnaire: Optional[QuestionnaireInput] = None
     behavioral: Optional[BehavioralInput] = None
     voice: Optional[VoiceInput] = None
+    history: Optional[HistoryOptIn] = None
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +298,8 @@ def _run_voice(payload: Optional[VoiceInput]) -> tuple[Optional[dict], Optional[
             return predict_voice_from_features(payload.features), None
         return _predict_voice_audio(payload.audio_base64 or ""), None
     except VoiceModelNotTrainedError:
+        if payload.audio_base64 is not None and payload.cloud_speech and load_settings().speech_content_enabled:
+            return _run_speech_content(payload.audio_base64)
         # Expected until a voice model is trained: honest "unavailable", not a bug.
         logger.info("Voice modality skipped: no trained model available yet.")
         return None, "model_not_trained"
@@ -291,6 +312,24 @@ def _run_voice(payload: Optional[VoiceInput]) -> tuple[Optional[dict], Optional[
         return None, "invalid_input"
     except Exception:
         logger.exception("Unexpected voice prediction failure.")
+        return None, "prediction_failed"
+
+
+def _run_speech_content(audio_base64: str) -> tuple[Optional[dict], Optional[str]]:
+    """Voice via Azure AI Speech (transcript) + AI Language (sentiment). Audio/transcript are not stored."""
+    try:
+        with _temp_wav(audio_base64) as path:
+            return assess_speech_content(path, load_settings()), None
+    except NoSpeechError:
+        return None, "no_speech_detected"
+    except CloudServiceError as error:
+        logger.warning("Speech-content analysis unavailable: %s", error)
+        return None, "speech_service_unavailable"
+    except (TypeError, ValueError, RuntimeError) as error:
+        logger.warning("Speech-content input rejected: %s", error)
+        return None, "invalid_input"
+    except Exception:
+        logger.exception("Unexpected speech-content failure.")
         return None, "prediction_failed"
 
 
@@ -322,8 +361,40 @@ def _run_voice_emotion(payload: Optional[VoiceInput]) -> tuple[Optional[dict], O
 # Endpoints
 # ---------------------------------------------------------------------------
 
+VOICE_DETAIL_EXTRAS = ("source", "sentiment", "transcript", "key_phrases", "caveat")
+
+
+def _principal(http_request: Optional[Request]) -> Optional[str]:
+    return http_request.headers.get("x-ms-client-principal-id") if http_request is not None else None
+
+
+def _save_history(opt_in: Optional[HistoryOptIn], fused: dict, http_request: Optional[Request]) -> Optional[str]:
+    """Opt-in only. Event Grid (-> /events -> Cosmos) when configured, else straight to Cosmos."""
+    if opt_in is None:
+        return None
+    settings = load_settings()
+    if not settings.history_enabled:
+        return "unavailable"
+    if fused.get("status") != "available":
+        return "skipped"
+    owner = cloud_history.resolve_owner(opt_in.anon_id, _principal(http_request), settings)
+    if owner is None:
+        return "invalid_id"
+    record = cloud_history.build_record(owner, fused)
+    try:
+        if settings.events_enabled:
+            cloud_events.publish(settings.eventgrid_endpoint or "", settings.eventgrid_key or "",
+                                 cloud_events.ASSESSMENT_COMPLETED, "/assessments", record)
+            return "queued"
+        cloud_history.save(record, settings)
+        return "saved"
+    except CloudServiceError as error:
+        logger.warning("History could not be saved: %s", error)
+        return "failed"
+
+
 @app.post("/assessment")
-def assess(request: AssessmentRequest) -> dict:
+def assess(request: AssessmentRequest, http_request: Request) -> dict:
     """Run every provided modality, fuse the usable results, and return one assessment.
 
     Never raises for a missing or failing individual modality -- that is
@@ -355,6 +426,7 @@ def assess(request: AssessmentRequest) -> dict:
             "risk_level": result["risk_level"],
             "confidence": result["confidence"],
             "completeness": result["data_quality"]["completeness"],
+            **{key: result[key] for key in VOICE_DETAIL_EXTRAS if name == "voice" and key in result},
         }
         for name, result in (
             ("questionnaire", questionnaire_result),
@@ -373,8 +445,82 @@ def assess(request: AssessmentRequest) -> dict:
             "behavioral": behavioral_status or "available",
             "voice": voice_status or "available",
         },
+        "history_status": _save_history(request.history, fused, http_request),
         "disclaimer": DISCLAIMER,
     }
+
+
+# ---------------------------------------------------------------------------
+# Opt-in history (Cosmos DB) and the Event Grid webhook that fills it
+# ---------------------------------------------------------------------------
+
+@app.post("/events")
+async def events_webhook(http_request: Request) -> Any:
+    """Event Grid delivery endpoint. Requires ?key=<CLOUD_EVENTS_SECRET>; stores validated summaries."""
+    settings = load_settings()
+    supplied = http_request.query_params.get("key", "")
+    if not settings.events_secret or not secrets.compare_digest(supplied.encode(), settings.events_secret.encode()):
+        raise HTTPException(status_code=401, detail="Unauthorized.")
+    try:
+        events = await http_request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON.") from None
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="Expected a list of events.")
+    stored = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("eventType") == cloud_events.SUBSCRIPTION_VALIDATION:
+            return {"validationResponse": (event.get("data") or {}).get("validationCode")}
+        if event.get("eventType") != cloud_events.ASSESSMENT_COMPLETED:
+            continue
+        try:
+            record = cloud_history.validate_record(event.get("data"))
+        except (TypeError, ValueError):
+            logger.warning("Ignored malformed assessment event.")
+            continue
+        if not settings.cosmos_enabled:
+            raise HTTPException(status_code=503, detail="History storage is not configured.")
+        try:
+            cloud_history.save(record, settings)
+        except CloudServiceError as error:
+            logger.warning("Event could not be stored: %s", error)
+            raise HTTPException(status_code=503, detail="Storage unavailable; retry.") from None  # Event Grid retries
+        stored += 1
+    return {"stored": stored}
+
+
+def _history_owner(anon_id: Optional[str], http_request: Request) -> str:
+    settings = load_settings()
+    if not settings.history_enabled:
+        raise HTTPException(status_code=404, detail="History is not enabled on this deployment.")
+    owner = cloud_history.resolve_owner(anon_id, _principal(http_request), settings)
+    if owner is None:
+        raise HTTPException(status_code=400, detail="A valid anonymous ID is required.")
+    return owner
+
+
+@app.get("/history")
+def get_history(http_request: Request, anon_id: Optional[str] = None) -> dict:
+    owner = _history_owner(anon_id, http_request)
+    try:
+        items = cloud_history.list_for(owner, load_settings())
+    except CloudServiceError as error:
+        logger.warning("History could not be read: %s", error)
+        raise HTTPException(status_code=503, detail="History is temporarily unavailable.") from None
+    return {"items": items, "trend": cloud_history.summarise_trend(items)}
+
+
+@app.delete("/history")
+def delete_history(http_request: Request, anon_id: Optional[str] = None) -> dict:
+    owner = _history_owner(anon_id, http_request)
+    try:
+        deleted = cloud_history.delete_all(owner, load_settings())
+    except CloudServiceError as error:
+        logger.warning("History could not be deleted: %s", error)
+        raise HTTPException(status_code=503, detail="History is temporarily unavailable.") from None
+    return {"deleted": deleted}
 
 
 @app.get("/health")
@@ -402,6 +548,18 @@ def _voice_model_summary(present: bool) -> dict:
         "held_out_macro_f1": held_out.get("macro_f1"),
         "held_out_participants": split.get("participants"),
         "note": "Held-out figures describe the training dataset only; not clinical or real-world accuracy.",
+    }
+
+
+def _cloud_summary() -> dict:
+    """Which optional free-tier Azure features are switched on (never keys or endpoints)."""
+    settings = load_settings()
+    return {
+        "hosted": is_hosted(),
+        "speech_content": settings.speech_content_enabled,
+        "history": settings.history_enabled,
+        "events": settings.events_enabled,
+        "signed_in_history": settings.trust_easy_auth,
     }
 
 
@@ -435,6 +593,7 @@ def status() -> dict:
         },
         "voice_model": _voice_model_summary(voice_trained),
         "voice_emotion_model": {"trained": _artifact_present("models/voice_emotion/selected_model.json")},
+        "cloud": _cloud_summary(),
         "note": "Behavioral model was trained on synthetic data; voice model is untrained unless 'voice' is true.",
     }
 

@@ -3,6 +3,11 @@
 These tests make the "no cloud spending" requirement enforceable. Azure code under
 ``src/azure`` and the deployment templates are preserved but are never imported or
 used by the running application.
+
+The optional free-tier integrations in ``src/cloud`` (Azure AI Speech/Language F0, Event Grid,
+Cosmos DB free tier) are the one exception: they are switched off unless ``CLOUD_*`` settings
+exist, all their network traffic goes through ``src/cloud/http.py``, and with no settings the
+app still makes no network calls at all (checked below with the network blocked).
 """
 import json
 import re
@@ -16,6 +21,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 RUNTIME_FILES = [p for p in SRC.rglob("*.py") if "azure" not in p.relative_to(SRC).parts and "__pycache__" not in p.parts]
+CLOUD_DIR = SRC / "cloud"
+LOCAL_RUNTIME_FILES = [p for p in RUNTIME_FILES if CLOUD_DIR not in p.parents]
 
 OFFLINE_RUN = textwrap.dedent(
     """
@@ -71,7 +78,8 @@ OFFLINE_RUN = textwrap.dedent(
 def test_app_runs_with_azure_imports_and_external_network_blocked():
     import os
 
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONWARNINGS="ignore")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLOUD_")}  # default install: nothing configured
+    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONWARNINGS="ignore")
     done = subprocess.run([sys.executable, "-c", OFFLINE_RUN], cwd=ROOT, capture_output=True, text=True, env=env, timeout=240)
     line = next((l for l in done.stdout.splitlines() if l.startswith("RESULT")), None)
     assert line, f"offline run failed:\n{done.stderr[-1500:]}"
@@ -90,8 +98,27 @@ def test_runtime_code_never_imports_azure():
 
 def test_runtime_code_has_no_network_libraries_or_azure_settings():
     pattern = re.compile(r"\b(requests|urllib|http\.client|aiohttp|httpx|urlopen|boto3|openai|AZURE_[A-Z_]+)\b")
-    offenders = {str(p.relative_to(ROOT)): sorted(set(pattern.findall(p.read_text(encoding="utf-8")))) for p in RUNTIME_FILES}
+    offenders = {str(p.relative_to(ROOT)): sorted(set(pattern.findall(p.read_text(encoding="utf-8")))) for p in LOCAL_RUNTIME_FILES}
     assert {k: v for k, v in offenders.items() if v} == {}
+
+
+def test_optional_cloud_code_has_a_single_network_choke_point():
+    """Only src/cloud/http.py may open connections; the rest of src/cloud builds requests through it."""
+    pattern = re.compile(r"\b(requests|urllib\.request|urlopen|http\.client|aiohttp|httpx|socket|boto3|openai)\b")
+    offenders = [str(p.relative_to(ROOT)) for p in CLOUD_DIR.glob("*.py")
+                 if p.name != "http.py" and pattern.search(p.read_text(encoding="utf-8"))]
+    assert offenders == []
+    assert not re.search(r"^\s*(?:import|from)\s+azure\b", "\n".join(p.read_text(encoding="utf-8") for p in CLOUD_DIR.glob("*.py")), re.M)
+
+
+def test_cloud_features_are_off_without_settings(monkeypatch):
+    from src.cloud.config import load_settings
+
+    for name in list(__import__("os").environ):
+        if name.startswith("CLOUD_"):
+            monkeypatch.delenv(name)
+    settings = load_settings()
+    assert not (settings.speech_content_enabled or settings.history_enabled or settings.events_enabled)
 
 
 def test_frontend_loads_nothing_from_the_internet():
