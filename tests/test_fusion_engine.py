@@ -27,7 +27,8 @@ class TestNormalFusion:
         assert fused["modalities_used"] == ["questionnaire"]
         assert fused["risk_score"] == pytest.approx(0.2)
         assert fused["risk_level"] == "low"
-        assert fused["agreement"]["level"] == "high"
+        assert fused["agreement"]["level"] == "not_applicable"  # one source cannot agree or disagree
+        assert fused["agreement"]["sources"] == 1
 
     def test_three_modalities_weights_sum_to_one(self):
         fused = fuse_modalities(

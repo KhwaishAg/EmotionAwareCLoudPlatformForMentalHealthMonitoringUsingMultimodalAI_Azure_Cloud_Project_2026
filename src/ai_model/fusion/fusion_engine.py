@@ -80,9 +80,13 @@ def calculate_fused_risk(results: Mapping[str, Mapping[str, Any]], weights: Mapp
 
 def calculate_agreement(results: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
     scores = [result["risk_score"] for result in results.values()]
-    score = 1.0 if len(scores) == 1 else float(np.clip(1.0 - (max(scores) - min(scores)), 0.0, 1.0))
+    if len(scores) == 1:
+        # Agreement needs at least two sources. Score stays 1.0 so a single source's confidence is not
+        # penalised, but the level says plainly that no cross-source comparison was possible.
+        return {"score": 1.0, "level": "not_applicable", "sources": 1}
+    score = float(np.clip(1.0 - (max(scores) - min(scores)), 0.0, 1.0))
     level = "high" if score >= .75 else "moderate" if score >= .50 else "low"
-    return {"score": score, "level": level}
+    return {"score": score, "level": level, "sources": len(scores)}
 
 
 def calculate_fused_confidence(results: Mapping[str, Mapping[str, Any]], weights: Mapping[str, float], agreement_score: float) -> float:
